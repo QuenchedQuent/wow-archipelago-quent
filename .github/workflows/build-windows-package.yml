@@ -1,0 +1,187 @@
+# Builds the two things players download:
+#   wow.apworld                         - Archipelago world + client (PyMySQL vendored)
+#   WoW-Archipelago-Server-win64.zip    - prebuilt AzerothCore + mod-ale + portable MySQL + scripts
+#
+# Run manually (Actions tab -> Run workflow) or push a tag like v0.1.0 to publish a release.
+# GitHub's Windows runners include Visual Studio, so nobody needs it locally.
+
+name: Build Windows package
+
+on:
+  workflow_dispatch:
+    inputs:
+      azerothcore_ref:
+        description: azerothcore-wotlk branch/tag/commit
+        default: master
+      ale_ref:
+        description: mod-ale branch/tag/commit
+        default: master
+  push:
+    tags: ['v*']
+
+env:
+  AC_REF: ${{ inputs.azerothcore_ref || 'master' }}
+  ALE_REF: ${{ inputs.ale_ref || 'master' }}
+  BOOST_VERSION: 1.87.0          # matches AzerothCore's own Windows CI
+  MYSQL_VERSION: 8.4.9           # MySQL 8.4 LTS; must be 8.x (AzerothCore doesn't support newer majors)
+  PYMYSQL_VERSION: 1.1.1
+
+jobs:
+  apworld:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Vendor PyMySQL and build wow.apworld
+        run: |
+          pip install --no-deps --target apworld/wow/vendor "pymysql==${PYMYSQL_VERSION}"
+          rm -rf apworld/wow/vendor/bin
+          cd apworld
+          zip -r ../wow.apworld wow -x '*/__pycache__/*'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wow-apworld
+          path: wow.apworld
+
+  server:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project
+
+      - name: Clone AzerothCore and mod-ale
+        run: |
+          git clone -c core.autocrlf=false https://github.com/azerothcore/azerothcore-wotlk.git ac
+          git -C ac checkout $env:AC_REF
+          git clone -c core.autocrlf=false https://github.com/azerothcore/mod-ale.git ac/modules/mod-ale
+          git -C ac/modules/mod-ale checkout $env:ALE_REF
+          "AC commit:  $(git -C ac rev-parse HEAD)"  | Tee-Object -Append versions.txt
+          "ALE commit: $(git -C ac/modules/mod-ale rev-parse HEAD)" | Tee-Object -Append versions.txt
+
+      - name: Cache Boost and MySQL
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\local\boost
+            C:\tools\mysql
+          key: deps-boost${{ env.BOOST_VERSION }}-mysql${{ env.MYSQL_VERSION }}
+
+      - name: Install Boost and MySQL
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $boostDir = 'C:\local\boost'
+          if (-not (Test-Path "$boostDir\boost\version.hpp")) {
+            $u = $env:BOOST_VERSION -replace '\.', '_'
+            $url = "https://sourceforge.net/projects/boost/files/boost-binaries/$env:BOOST_VERSION/boost_$u-msvc-14.3-64.exe/download"
+            curl.exe -L --fail --retry 5 -A "Mozilla/5.0" -o boost.exe $url
+            if ((Get-Item boost.exe).Length -lt 50MB) { throw 'Boost download looks like an error page' }
+            Start-Process .\boost.exe -ArgumentList '/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES', "/DIR=$boostDir" -Wait
+          }
+          $mysqlDir = 'C:\tools\mysql'
+          if (-not (Test-Path "$mysqlDir\lib\libmysql.lib")) {
+            $v = $env:MYSQL_VERSION; $mm = ($v -split '\.')[0..1] -join '.'
+            $name = "mysql-$v-winx64"
+            $ok = $false
+            foreach ($url in "https://cdn.mysql.com/Downloads/MySQL-$mm/$name.zip",
+                             "https://cdn.mysql.com/archives/mysql-$mm/$name.zip") {
+              curl.exe -L --fail --retry 3 -o mysql.zip $url
+              if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            }
+            if (-not $ok) { throw "Could not download MySQL $v" }
+            7z x mysql.zip -oC:\tools | Out-Null
+            Move-Item "C:\tools\$name" $mysqlDir
+          }
+          $openssl = Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory | Select-Object -First 1
+          if (-not $openssl) { throw 'OpenSSL not found on runner' }
+          "BOOST_ROOT=$boostDir"                | Out-File -Append $env:GITHUB_ENV
+          "MYSQL_DIR=$mysqlDir"                 | Out-File -Append $env:GITHUB_ENV
+          "OPENSSL_ROOT_DIR=$($openssl.FullName)" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Configure
+        run: |
+          cmake -S ac -B build -A x64 `
+            -DTOOLS_BUILD=none -DSCRIPTS=static -DMODULES=static `
+            -DBOOST_ROOT="$env:BOOST_ROOT" `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
+            -DMYSQL_INCLUDE_DIR="$env:MYSQL_DIR/include" `
+            -DMYSQL_LIBRARY="$env:MYSQL_DIR/lib/libmysql.lib"
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo --parallel
+
+      - name: Assemble package
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = 'dist\WoW-Archipelago-Server'
+          New-Item -ItemType Directory -Force "$pkg\server\configs\modules", "$pkg\mysql", "$pkg\source\data" | Out-Null
+
+          # Server binaries (no .pdb - they're huge) and config templates.
+          $bin = (Get-ChildItem build -Recurse -Filter worldserver.exe | Select-Object -First 1).DirectoryName
+          Get-ChildItem $bin -File | Where-Object { $_.Extension -in '.exe', '.dll' } | Copy-Item -Destination "$pkg\server"
+          Get-ChildItem build -Recurse -Filter '*.conf.dist' | ForEach-Object {
+            $dest = if ($_.Name -in 'worldserver.conf.dist', 'authserver.conf.dist') { "$pkg\server\configs" } else { "$pkg\server\configs\modules" }
+            Copy-Item $_.FullName $dest -Force
+          }
+          if (-not (Test-Path "$pkg\server\configs\modules\mod_ale.conf.dist")) { throw 'mod_ale.conf.dist missing - ALE not built?' }
+
+          # Runtime DLLs: OpenSSL, MySQL client, MSVC runtime (app-local).
+          Get-ChildItem "$env:OPENSSL_ROOT_DIR\bin" -Filter 'lib*-3-x64.dll' | Copy-Item -Destination "$pkg\server" -Force
+          Copy-Item "$env:MYSQL_DIR\lib\libmysql.dll" "$pkg\server" -Force
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC" -Recurse -Directory -Filter 'Microsoft.VC14*.CRT' |
+                 Where-Object { $_.FullName -match '\\x64\\' -and $_.FullName -notmatch 'onecore|debug' } | Select-Object -First 1
+          Copy-Item "$($crt.FullName)\*.dll" "$pkg\server" -Force
+
+          # Portable MySQL server (trimmed).
+          New-Item -ItemType Directory -Force "$pkg\mysql\bin", "$pkg\mysql\lib" | Out-Null
+          Copy-Item "$env:MYSQL_DIR\bin\mysqld.exe", "$env:MYSQL_DIR\bin\mysql.exe", "$env:MYSQL_DIR\bin\mysqladmin.exe" "$pkg\mysql\bin"
+          Copy-Item "$env:MYSQL_DIR\bin\*.dll" "$pkg\mysql\bin"
+          Copy-Item "$($crt.FullName)\*.dll" "$pkg\mysql\bin" -Force
+          Copy-Item -Recurse "$env:MYSQL_DIR\share" "$pkg\mysql\share"
+          Copy-Item -Recurse "$env:MYSQL_DIR\lib\plugin" "$pkg\mysql\lib\plugin"
+          Copy-Item "$env:MYSQL_DIR\LICENSE" "$pkg\mysql\" -ErrorAction SilentlyContinue
+
+          # SQL for AzerothCore's auto-setup, plus our tables as custom characters SQL.
+          Copy-Item -Recurse ac\data\sql "$pkg\source\data\sql"
+          New-Item -ItemType Directory -Force "$pkg\source\data\sql\custom\db_characters" | Out-Null
+          Copy-Item project\server\sql\archipelago_schema.sql "$pkg\source\data\sql\custom\db_characters\"
+
+          # Our pieces.
+          Copy-Item -Recurse project\server\lua_scripts "$pkg\lua_scripts"
+          New-Item -ItemType Directory -Force "$pkg\addon" | Out-Null
+          Copy-Item -Recurse project\addon\Archipelago "$pkg\addon\Archipelago"
+          Copy-Item -Recurse project\package\scripts "$pkg\scripts"
+          Copy-Item project\package\*.bat, project\package\README.txt $pkg
+          Copy-Item versions.txt $pkg
+
+          7z a -tzip -mx=7 dist\WoW-Archipelago-Server-win64.zip ".\$pkg\*" | Out-Null
+          "Package size: $([math]::Round((Get-Item dist\WoW-Archipelago-Server-win64.zip).Length / 1MB)) MB"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wow-archipelago-server-win64
+          path: dist/WoW-Archipelago-Server-win64.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [apworld, server]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/wow.apworld
+            out/WoW-Archipelago-Server-win64.zip

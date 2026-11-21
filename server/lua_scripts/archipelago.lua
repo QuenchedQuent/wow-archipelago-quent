@@ -1,0 +1,355 @@
+--[[
+  Archipelago integration for AzerothCore + Eluna.
+
+  - Detects checks (quest completion, level, exploration, rare kills) and writes them
+    to ap_location_outbox for the Python bridge.
+  - Grants items the bridge puts in ap_item_inbox (spells, zone keys, items, money).
+  - Fences zones the player has no key for.
+  - Feeds the Archipelago addon over addon messages (prefix "AP").
+
+  ID ENCODING must match apworld/wow/data.py:
+    location = LOC_BASE  + kind * KIND_SIZE + game_id
+    item     = ITEM_BASE + kind * KIND_SIZE + payload
+
+  Hook numbers are from Eluna's Hooks.h; verify them against the Eluna/ALE build on
+  your server (`grep PLAYER_EVENT_ON_ Hooks.h`).
+]]
+
+local AP = {}
+
+AP.LOC_BASE  = 870000000
+AP.ITEM_BASE = 880000000
+AP.KIND_SIZE = 1000000
+AP.LOC  = { QUEST = 0, EXPLORE = 1, LEVEL = 2, RARE = 3, VENDOR = 4, TRAINER = 5, GOAL = 9 }
+AP.ITEM = { SPELL = 0, ZONE = 1, GAME_ITEM = 2, MONEY = 3, FLIGHT = 4 }
+
+AP.PREFIX       = "AP"
+AP.TICK_MS      = 1000
+AP.SWEEP_TICKS  = 5      -- quest sweep / tracker refresh every N ticks
+AP.MAX_LEVEL_CHECK = 60
+
+-- Zones gated by a "Zone: X" item. free_areas are subzones always allowed (start area).
+-- VERIFY area ids in game with `.ap where`.
+AP.ZONE_LOCKS = {
+    [12] = { name = "Elwynn Forest", free_areas = { [9] = true, [24] = true, [34] = true, [59] = true } },
+    [40] = { name = "Westfall" },
+}
+-- Where fenced players are sent (Northshire Abbey, human start).
+AP.RETURN_POINT = { map = 0, x = -8949.95, y = -132.49, z = 83.53, o = 0.0 }
+
+-- Eluna hook ids
+local PLAYER_EVENT_ON_LOGIN          = 3
+local PLAYER_EVENT_ON_LOGOUT         = 4
+local PLAYER_EVENT_ON_KILL_CREATURE  = 7
+local PLAYER_EVENT_ON_LEVEL_CHANGE   = 13
+local PLAYER_EVENT_ON_UPDATE_ZONE    = 27
+local PLAYER_EVENT_ON_COMMAND        = 42
+local PLAYER_EVENT_ON_COMPLETE_QUEST = 54
+local SERVER_EVENT_ON_ADDON_MESSAGE  = 30
+local CHAT_MSG_WHISPER               = 7
+
+-- Per-character runtime state, keyed by low guid.
+local state = {}
+
+---------------------------------------------------------------------------------------
+-- helpers
+---------------------------------------------------------------------------------------
+
+local function locId(kind, gameId)
+    return AP.LOC_BASE + kind * AP.KIND_SIZE + gameId
+end
+
+local function decode(id, base)
+    local off = id - base
+    return math.floor(off / AP.KIND_SIZE), off % AP.KIND_SIZE
+end
+
+local function say(player, text)
+    player:SendBroadcastMessage("|cff00ccff[Archipelago]|r " .. text)
+end
+
+local function toAddon(player, ...)
+    local msg = table.concat({ ... }, "\t")
+    if #msg > 250 then msg = msg:sub(1, 250) end
+    player:SendAddonMessage(AP.PREFIX, msg, CHAT_MSG_WHISPER, player)
+end
+
+local function getState(player)
+    return state[player:GetGUIDLow()]
+end
+
+---------------------------------------------------------------------------------------
+-- checks (game -> AP)
+---------------------------------------------------------------------------------------
+
+local function sendCheck(player, kind, gameId)
+    local st = getState(player)
+    if not st then return end
+    local id = locId(kind, gameId)
+    if st.sent[id] then return end
+    st.sent[id] = true
+    CharDBExecute(string.format(
+        "INSERT IGNORE INTO ap_location_outbox (char_guid, location_id) VALUES (%d, %d)",
+        st.guid, id))
+end
+
+local function checkLevels(player)
+    local level = math.min(player:GetLevel(), AP.MAX_LEVEL_CHECK)
+    for lvl = 2, level do
+        sendCheck(player, AP.LOC.LEVEL, lvl)
+    end
+    local st = getState(player)
+    if st and st.goalLevel > 0 and player:GetLevel() >= st.goalLevel then
+        sendCheck(player, AP.LOC.GOAL, 0)
+    end
+end
+
+-- Robust quest detection: any tracked quest that is rewarded counts, even if the
+-- event hook was missed (server restart, reload, hook semantics).
+local function sweepQuests(player, st)
+    for id, _ in pairs(st.locations) do
+        local kind, questId = decode(id, AP.LOC_BASE)
+        if kind == AP.LOC.QUEST and not st.sent[id] and player:GetQuestRewardStatus(questId) then
+            sendCheck(player, AP.LOC.QUEST, questId)
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- items (AP -> game)
+---------------------------------------------------------------------------------------
+
+-- Apply an item's effect. Returns false if it must be retried later (e.g. bags full).
+local function applyItem(player, st, itemId, announce)
+    local kind, payload = decode(itemId, AP.ITEM_BASE)
+    if kind == AP.ITEM.SPELL then
+        if not player:HasSpell(payload) then player:LearnSpell(payload) end
+    elseif kind == AP.ITEM.ZONE then
+        st.zones[payload] = true
+    elseif kind == AP.ITEM.GAME_ITEM then
+        if announce then
+            local added = player:AddItem(payload, 1)
+            if not added then
+                if not st.bagWarned then say(player, "Bags full - item will be delivered later.") end
+                st.bagWarned = true
+                return false
+            end
+            st.bagWarned = false
+        end
+    elseif kind == AP.ITEM.MONEY then
+        if announce then player:ModifyMoney(payload) end
+    end
+    return true
+end
+
+local function processInbox(player, st)
+    local q = CharDBQuery(string.format(
+        "SELECT ap_index, item_id, item_name, sender_name FROM ap_item_inbox "
+            .. "WHERE char_guid = %d AND granted = 0 ORDER BY ap_index LIMIT 20", st.guid))
+    if not q then return end
+    repeat
+        local index = q:GetUInt32(0)
+        if not st.granting[index] then
+            local itemId, name, sender = q:GetUInt32(1), q:GetString(2), q:GetString(3)
+            if applyItem(player, st, itemId, true) then
+                st.granting[index] = true
+                CharDBExecute(string.format(
+                    "UPDATE ap_item_inbox SET granted = 1 WHERE char_guid = %d AND ap_index = %d",
+                    st.guid, index))
+                say(player, string.format("Received |cffffff00%s|r from %s", name, sender))
+                toAddon(player, "I", name, sender)
+            else
+                break -- keep order; retry next tick
+            end
+        end
+    until not q:NextRow()
+end
+
+-- Re-apply persistent unlocks (zone keys) from already-granted items on login.
+local function loadUnlocks(st)
+    local q = CharDBQuery(string.format(
+        "SELECT item_id FROM ap_item_inbox WHERE char_guid = %d AND granted = 1", st.guid))
+    if not q then return end
+    repeat
+        local kind, payload = decode(q:GetUInt32(0), AP.ITEM_BASE)
+        if kind == AP.ITEM.ZONE then st.zones[payload] = true end
+    until not q:NextRow()
+end
+
+---------------------------------------------------------------------------------------
+-- zone fence
+---------------------------------------------------------------------------------------
+
+local function enforceZone(player, st)
+    if player:IsGM() then return end
+    local zone, area = player:GetZoneId(), player:GetAreaId()
+    local lock = AP.ZONE_LOCKS[zone]
+    if not lock or st.zones[zone] then return end
+    if lock.free_areas and lock.free_areas[area] then return end
+    local p = AP.RETURN_POINT
+    say(player, "You need |cffffff00Zone: " .. lock.name .. "|r to go there.")
+    player:Teleport(p.map, p.x, p.y, p.z, p.o)
+end
+
+---------------------------------------------------------------------------------------
+-- tracker / status sync
+---------------------------------------------------------------------------------------
+
+local function refreshFromDB(player, st, pushChanges)
+    local q = CharDBQuery(string.format(
+        "SELECT location_id, checked, name FROM ap_locations WHERE char_guid = %d", st.guid))
+    if q then
+        repeat
+            local id, checked, name = q:GetUInt32(0), q:GetUInt32(1) == 1, q:GetString(2)
+            local known = st.locations[id]
+            if known == nil then
+                st.locations[id] = { checked = checked, name = name }
+                if pushChanges then toAddon(player, "L", id, checked and 1 or 0, name) end
+            elseif checked and not known.checked then
+                known.checked = true
+                if pushChanges then toAddon(player, "C", id) end
+            end
+        until not q:NextRow()
+    end
+
+    local s = CharDBQuery(string.format(
+        "SELECT connected, slot_name, checked_count, total_count, goal_level FROM ap_state WHERE char_guid = %d",
+        st.guid))
+    local status
+    if s then
+        st.goalLevel = s:GetUInt32(4)
+        status = table.concat({ s:GetUInt32(0), s:GetString(1), s:GetUInt32(2), s:GetUInt32(3), st.goalLevel }, "\t")
+    else
+        status = "0\t\t0\t0\t0"
+    end
+    if pushChanges and status ~= st.lastStatus then
+        toAddon(player, "S", status)
+    end
+    st.lastStatus = status
+end
+
+local function fullSyncToAddon(player, st)
+    toAddon(player, "RESET")
+    toAddon(player, "S", st.lastStatus or "0\t\t0\t0\t0")
+    for id, loc in pairs(st.locations) do
+        toAddon(player, "L", id, loc.checked and 1 or 0, loc.name)
+    end
+    toAddon(player, "END")
+end
+
+---------------------------------------------------------------------------------------
+-- lifecycle
+---------------------------------------------------------------------------------------
+
+local function initPlayer(player)
+    local guid = player:GetGUIDLow()
+    local st = {
+        guid = guid, sent = {}, granting = {}, zones = {}, locations = {},
+        goalLevel = 0, ticks = 0, lastStatus = nil,
+    }
+    state[guid] = st
+
+    local q = CharDBQuery(string.format(
+        "SELECT location_id FROM ap_location_outbox WHERE char_guid = %d", guid))
+    if q then
+        repeat st.sent[q:GetUInt32(0)] = true until not q:NextRow()
+    end
+    loadUnlocks(st)
+    refreshFromDB(player, st, false)
+    checkLevels(player)
+    sweepQuests(player, st)
+end
+
+local function tickPlayer(player)
+    local st = getState(player)
+    if not st then
+        initPlayer(player)
+        st = getState(player)
+    end
+    st.ticks = st.ticks + 1
+    processInbox(player, st)
+    enforceZone(player, st)
+    -- Subzone changes don't always fire ON_UPDATE_ZONE; poll the current area too.
+    local area = player:GetAreaId()
+    if next(st.locations) ~= nil and st.locations[locId(AP.LOC.EXPLORE, area)] then
+        sendCheck(player, AP.LOC.EXPLORE, area)
+    end
+    if st.ticks % AP.SWEEP_TICKS == 0 then
+        refreshFromDB(player, st, true)
+        sweepQuests(player, st)
+        checkLevels(player)
+    end
+end
+
+CreateLuaEvent(function()
+    for _, player in ipairs(GetPlayersInWorld() or {}) do
+        local ok, err = pcall(tickPlayer, player)
+        if not ok then print("[Archipelago] tick error: " .. tostring(err)) end
+    end
+end, AP.TICK_MS, 0)
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_LOGIN, function(_, player)
+    initPlayer(player)
+end)
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_LOGOUT, function(_, player)
+    state[player:GetGUIDLow()] = nil
+end)
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_COMPLETE_QUEST, function(_, player, quest)
+    sendCheck(player, AP.LOC.QUEST, quest:GetId())
+end)
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_LEVEL_CHANGE, function(_, player)
+    checkLevels(player)
+end)
+
+-- Kills and area changes are noisy: once the bridge has synced the slot's locations,
+-- only send ids that are actually locations. Before that, send everything (the
+-- bridge drops unknown ids) so nothing found pre-sync is lost.
+local function sendIfTracked(player, kind, gameId)
+    local st = getState(player)
+    if not st then return end
+    if next(st.locations) == nil or st.locations[locId(kind, gameId)] then
+        sendCheck(player, kind, gameId)
+    end
+end
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_UPDATE_ZONE, function(_, player, _, newArea)
+    sendIfTracked(player, AP.LOC.EXPLORE, newArea)
+    local st = getState(player)
+    if st then enforceZone(player, st) end
+end)
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_KILL_CREATURE, function(_, player, creature)
+    sendIfTracked(player, AP.LOC.RARE, creature:GetEntry())
+end)
+
+-- `.ap` chat commands (debug).
+RegisterPlayerEvent(PLAYER_EVENT_ON_COMMAND, function(_, player, command)
+    if not player then return end -- console
+    local cmd = command:lower()
+    if cmd == "ap where" then
+        say(player, string.format("zone %d, area %d, map %d, pos %.2f %.2f %.2f",
+            player:GetZoneId(), player:GetAreaId(), player:GetMapId(),
+            player:GetX(), player:GetY(), player:GetZ()))
+        return false
+    elseif cmd == "ap status" then
+        local st = getState(player)
+        say(player, "Status: " .. tostring(st and st.lastStatus or "no state"):gsub("\t", " | "))
+        return false
+    end
+end)
+
+-- Messages from the addon (whispered to self).
+RegisterServerEvent(SERVER_EVENT_ON_ADDON_MESSAGE, function(_, sender, _, prefix, msg)
+    if prefix ~= AP.PREFIX or not sender then return end
+    local st = getState(sender)
+    if not st then return end
+    if msg == "SYNC" then
+        refreshFromDB(sender, st, false)
+        fullSyncToAddon(sender, st)
+    end
+end)
+
+print("[Archipelago] loaded")

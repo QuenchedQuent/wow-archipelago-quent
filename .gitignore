@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+apworld/wow/vendor/
+*.apworld
+dist/
+*.log

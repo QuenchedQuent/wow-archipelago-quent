@@ -1,0 +1,15 @@
+# Copy this file into the root of your azerothcore-wotlk clone (next to docker-compose.yml).
+# Docker Compose merges it automatically, and it survives `git pull` of AzerothCore.
+#
+# Adjust the host path below if this project lives somewhere else.
+
+services:
+  ac-worldserver:
+    volumes:
+      # Our Eluna/ALE scripts, mounted live: edit in VS Code, then `.reload ale` in game.
+      - "E:/Programming Projects/Python/WoW/server/lua_scripts:/azerothcore/lua_scripts:ro"
+    environment:
+      # ALE.ScriptPath -> AC_ALE_SCRIPT_PATH (AzerothCore env-var config override)
+      AC_ALE_SCRIPT_PATH: "/azerothcore/lua_scripts"
+      # Print Lua stack traces on errors (ALE.TraceBack)
+      AC_ALE_TRACE_BACK: "1"

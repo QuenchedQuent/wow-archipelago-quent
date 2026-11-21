@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Archipelago
+## Notes: Archipelago randomizer tracker and item feed
+## Version: 0.1.0
+## SavedVariablesPerCharacter: ArchipelagoDB
+
+Core.lua
+UI.lua
