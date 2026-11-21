@@ -160,9 +160,15 @@ jobs:
           # Runtime DLLs: OpenSSL, MySQL client, MSVC runtime (app-local).
           Get-ChildItem "$env:OPENSSL_ROOT_DIR\bin" -Filter 'lib*-3-x64.dll' | Copy-Item -Destination "$pkg\server" -Force
           Copy-Item "$env:MYSQL_DIR\lib\libmysql.dll" "$pkg\server" -Force
+          # Must be the NEWEST redist: binaries built with a newer toolset crash (0xC0000005 in
+          # msvcp140.dll) when run against an older runtime. VS ships several CRT folders.
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $crt = Get-ChildItem "$vs\VC\Redist\MSVC" -Recurse -Directory -Filter 'Microsoft.VC14*.CRT' |
-                 Where-Object { $_.FullName -match '\\x64\\' -and $_.FullName -notmatch 'onecore|debug' } | Select-Object -First 1
+          $msvcp = Get-ChildItem "$vs\VC\Redist\MSVC" -Recurse -Filter 'msvcp140.dll' |
+                   Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC14\d\.CRT\\' -and $_.FullName -notmatch 'onecore|debug' } |
+                   Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending | Select-Object -First 1
+          if (-not $msvcp) { throw 'MSVC x64 CRT redist not found' }
+          $crt = $msvcp.Directory
+          "Bundling MSVC runtime $($msvcp.VersionInfo.FileVersion) from $($crt.FullName)"
           Copy-Item "$($crt.FullName)\*.dll" "$pkg\server" -Force
 
           # Portable MySQL server (trimmed).
@@ -186,6 +192,17 @@ jobs:
           Copy-Item -Recurse project\package\scripts "$pkg\scripts"
           Copy-Item project\package\*.bat, project\package\README.txt $pkg
           Copy-Item versions.txt $pkg
+
+          # Smoke test: every bundled binary must start using the bundled DLLs
+          # (app-local DLLs win over System32, so this catches runtime mismatches).
+          foreach ($exe in "$pkg\server\worldserver.exe", "$pkg\server\authserver.exe") {
+            $p = Start-Process $exe -ArgumentList '--version' -WorkingDirectory (Split-Path $exe) `
+                   -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\v.txt"
+            Get-Content "$env:RUNNER_TEMP\v.txt"
+            if ($p.ExitCode -ne 0) { throw "$exe --version failed with exit code $($p.ExitCode)" }
+          }
+          & "$pkg\mysql\bin\mysqld.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'mysqld --version failed' }
 
           7z a -tzip -mx=7 dist\WoW-Archipelago-Server-win64.zip ".\$pkg\*" | Out-Null
           "Package size: $([math]::Round((Get-Item dist\WoW-Archipelago-Server-win64.zip).Length / 1MB)) MB"
