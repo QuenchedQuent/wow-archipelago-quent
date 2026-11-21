@@ -98,8 +98,19 @@ function Start-AuthServer([string]$windowStyle = 'Minimized') {
 function Start-WorldServer([string]$windowStyle = 'Normal') {
     $existing = Get-ServerProcess 'worldserver'
     if ($existing) { return $existing }
-    Start-Process -FilePath (Join-Path $Server 'worldserver.exe') -WorkingDirectory $Server `
-        -ArgumentList '-c', "`"$Confs\worldserver.conf`"" -WindowStyle $windowStyle -PassThru
+    $opts = @{
+        FilePath         = Join-Path $Server 'worldserver.exe'
+        WorkingDirectory = $Server
+        ArgumentList     = '-c', "`"$Confs\worldserver.conf`""
+        WindowStyle      = $windowStyle
+        PassThru         = $true
+    }
+    if ($windowStyle -eq 'Hidden') {
+        # No window to read, so keep the console output. Startup assertions only go to stderr.
+        $opts.RedirectStandardOutput = Join-Path $LogsDir 'worldserver-stdout.txt'
+        $opts.RedirectStandardError  = Join-Path $LogsDir 'worldserver-stderr.txt'
+    }
+    Start-Process @opts
 }
 
 # --- accounts (SRP6, same math as AzerothCore's AccountMgr) ------------------------

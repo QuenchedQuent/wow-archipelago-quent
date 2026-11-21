@@ -162,6 +162,11 @@ jobs:
 
           # Runtime DLLs: OpenSSL, MySQL client, MSVC runtime (app-local).
           Get-ChildItem "$env:OPENSSL_ROOT_DIR\bin" -Filter 'lib*-3-x64.dll' | Copy-Item -Destination "$pkg\server" -Force
+          # AzerothCore asserts at startup unless OpenSSL's legacy provider sits next to the exe.
+          $legacy = Get-ChildItem $env:OPENSSL_ROOT_DIR -Recurse -Filter 'legacy.dll' | Select-Object -First 1
+          if (-not $legacy) { throw "legacy.dll not found under $env:OPENSSL_ROOT_DIR" }
+          Copy-Item $legacy.FullName "$pkg\server" -Force
+          Write-Host "OpenSSL legacy provider: $($legacy.FullName)"
           Copy-Item "$env:MYSQL_DIR\lib\libmysql.dll" "$pkg\server" -Force
           # Must be the NEWEST redist: binaries built with a newer toolset crash (0xC0000005 in
           # msvcp140.dll) when run against an older runtime. VS ships several CRT folders.

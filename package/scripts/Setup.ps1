@@ -130,6 +130,8 @@ if (Get-ServerProcess 'worldserver') {
     if (-not (Wait-Port $WorldPort 1800 $ws)) {
         if ($ws -and -not $ws.HasExited) { Stop-Process -Id $ws.Id -Force }
         Write-Host (Get-Content (Join-Path $LogsDir 'Server.log') -Tail 30 -ErrorAction SilentlyContinue | Out-String)
+        $err = Get-Content (Join-Path $LogsDir 'worldserver-stderr.txt') -ErrorAction SilentlyContinue | Out-String
+        if ($err.Trim()) { Write-Host $err -ForegroundColor Red }
         throw "World server failed to start. Full log: $LogsDir\Server.log"
     }
     Stop-Process -Id $ws.Id -Force
