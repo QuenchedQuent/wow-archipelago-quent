@@ -191,7 +191,7 @@ jobs:
           # SQL for AzerothCore's auto-setup, plus our tables as custom characters SQL.
           Copy-Item -Recurse ac\data\sql "$pkg\source\data\sql"
           New-Item -ItemType Directory -Force "$pkg\source\data\sql\custom\db_characters" | Out-Null
-          Copy-Item project\server\sql\archipelago_schema.sql "$pkg\source\data\sql\custom\db_characters\"
+          Copy-Item project\server\sql\*.sql "$pkg\source\data\sql\custom\db_characters\"
           New-Item -ItemType Directory -Force "$pkg\source\data\sql\custom\db_world" | Out-Null
           Copy-Item project\server\sql\world\*.sql "$pkg\source\data\sql\custom\db_world\"
 

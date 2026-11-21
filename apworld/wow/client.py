@@ -71,6 +71,7 @@ class WoWContext(CommonContext):
         self.need_full_sync = False
         self.items_written = 0
         self.written_checked: Set[int] = set()
+        self.written_contents: Set[int] = set()
         self._last_hint = 0.0
         self._db_ok = True
 
@@ -176,6 +177,24 @@ class WoWContext(CommonContext):
             self.written_checked |= newly_checked
             await self.write_state(guid)
 
+        # Tracker: what each location holds (answers to our LocationScouts).
+        new_info = set(self.locations_info) - self.written_contents
+        if new_info:
+            await asyncio.to_thread(db.upsert_contents, guid, [
+                (lid, self.describe(self.locations_info[lid]), int(self.locations_info[lid].flags))
+                for lid in new_info])
+            self.written_contents |= new_info
+
+    def describe(self, item) -> str:
+        """'Spell: Charge' for our own items, 'Hookshot for Alice (Zelda)' for others."""
+        name = self.item_names.lookup_in_slot(item.item, item.player)
+        if item.player == self.slot:
+            return name
+        player = self.player_names.get(item.player, f"Player {item.player}")
+        info = self.slot_info.get(item.player)
+        game = f" ({info.game})" if info else ""
+        return f"{name} for {player}{game}"
+
     async def full_sync(self, guid: int) -> None:
         db = self.db
         self.items_written = await asyncio.to_thread(db.max_item_index, guid) + 1
@@ -190,6 +209,12 @@ class WoWContext(CommonContext):
         # Resend everything ever found; the server ignores duplicates. Covers checks
         # made while the client was closed.
         await self.send_checks(await asyncio.to_thread(db.all_outbox_locations, guid))
+
+        # Ask what every location holds, so the addon can show it in the quest window.
+        # (No hints are created: create_as_hint 0.)
+        self.written_contents = set()
+        if locations:
+            await self.send_msgs([{"cmd": "LocationScouts", "locations": sorted(locations), "create_as_hint": 0}])
         self.need_full_sync = False
         logger.info(f"Synced {len(locations)} locations.")
 

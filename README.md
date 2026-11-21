@@ -40,6 +40,11 @@ AzerothCore world DB by [tools/extract_data.py](tools/extract_data.py). Don't ha
 - `apworld/wow/gen_data.py`: regions, quests, exploration, rares and spell items for the APWorld
 - `server/lua_scripts/archipelago_data.lua`: zone fence and locked spells for the server script
 - `server/sql/world/archipelago_trainers.sql`: removes pooled spells from class trainers
+- `server/sql/world/archipelago_quest_rewards.sql`: removes gear rewards from quest locations
+
+Both SQL files copy the original rows into `ap_trainer_spell_backup` / `ap_quest_reward_backup`
+first. The extractor reads from those backups, so it can safely be re-run on a server that already
+has the SQL applied.
 
 To regenerate, start the server package's MySQL, then run:
 ```powershell
@@ -52,6 +57,13 @@ The scope (race, class, zones, max level) is set at the top of the script.
 Every spell in the pool is an Archipelago item. Trainers don't teach them (see the SQL above), and
 the server script unlearns any that arrive some other way, such as class quest rewards or
 characters created earlier, unless the player received that spell from the multiworld.
+
+## Quest rewards
+A quest that is a location gives its normal XP, money and reputation, but its gear is replaced by
+the Archipelago check. That gear (for "choose one" rewards, the best pick for a warrior) is added
+to the item pool, so it may arrive from any check in the multiworld. Non-gear rewards such as food,
+and items other quests need, are left alone. The client scouts every location, and the addon
+shows what each quest holds next to the quest window and the quest log.
 
 ## Next (see plan)
 Vendor/trainer checks, equip and flight-path items, and more classes and zones.

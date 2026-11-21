@@ -74,6 +74,9 @@ ZONE_KEYS: Dict[str, int] = dict(gen_data.ZONE_KEYS)
 # Spells in the pool: item name -> spell id
 SPELLS: Dict[str, int] = {name: spell for name, (spell, _level) in gen_data.SPELLS.items()}
 
+# Quest reward gear (taken off the quests, shuffled into the pool): name -> (item entry, copies)
+GEAR: Dict[str, tuple] = {name: (entry, copies) for name, (entry, copies, _req) in gen_data.GEAR.items()}
+
 # Filler: name -> item id
 FILLER_ITEMS: Dict[str, int] = {
     "Item: Minor Healing Potion": item_id(ItemKind.GAME_ITEM, 118),

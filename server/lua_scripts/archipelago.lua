@@ -224,16 +224,29 @@ end
 -- tracker / status sync
 ---------------------------------------------------------------------------------------
 
+-- L <id> <checked> <name> <flags> <contents>; contents last so the 250-char cap only clips it.
+local function sendLocation(player, id, loc)
+    toAddon(player, "L", id, loc.checked and 1 or 0, loc.name, loc.flags, loc.contents)
+end
+
 local function refreshFromDB(player, st, pushChanges)
     local q = CharDBQuery(string.format(
-        "SELECT location_id, checked, name FROM ap_locations WHERE char_guid = %d", st.guid))
+        "SELECT l.location_id, l.checked, l.name, COALESCE(c.contents, ''), COALESCE(c.flags, 0) "
+            .. "FROM ap_locations l LEFT JOIN ap_location_contents c "
+            .. "ON c.char_guid = l.char_guid AND c.location_id = l.location_id "
+            .. "WHERE l.char_guid = %d", st.guid))
     if q then
         repeat
             local id, checked, name = q:GetUInt32(0), q:GetUInt32(1) == 1, q:GetString(2)
+            local contents, flags = q:GetString(3), q:GetUInt32(4)
             local known = st.locations[id]
             if known == nil then
-                st.locations[id] = { checked = checked, name = name }
-                if pushChanges then toAddon(player, "L", id, checked and 1 or 0, name) end
+                known = { checked = checked, name = name, contents = contents, flags = flags }
+                st.locations[id] = known
+                if pushChanges then sendLocation(player, id, known) end
+            elseif known.contents ~= contents then
+                known.contents, known.flags, known.checked = contents, flags, checked or known.checked
+                if pushChanges then sendLocation(player, id, known) end
             elseif checked and not known.checked then
                 known.checked = true
                 if pushChanges then toAddon(player, "C", id) end
@@ -261,7 +274,7 @@ local function fullSyncToAddon(player, st)
     toAddon(player, "RESET")
     toAddon(player, "S", st.lastStatus or "0\t\t0\t0\t0")
     for id, loc in pairs(st.locations) do
-        toAddon(player, "L", id, loc.checked and 1 or 0, loc.name)
+        sendLocation(player, id, loc)
     end
     toAddon(player, "END")
 end

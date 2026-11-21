@@ -116,3 +116,9 @@ class BridgeDB:
             "INSERT INTO ap_locations (char_guid, location_id, name, checked) VALUES (%s,%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE name=VALUES(name), checked=VALUES(checked)",
             [(guid, lid, name[:128], int(checked)) for lid, name, checked in rows])
+
+    def upsert_contents(self, guid: int, rows: Iterable[Tuple[int, str, int]]) -> None:
+        self._many(
+            "INSERT INTO ap_location_contents (char_guid, location_id, contents, flags) VALUES (%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE contents=VALUES(contents), flags=VALUES(flags)",
+            [(guid, lid, text[:160], flags) for lid, text, flags in rows])

@@ -5,7 +5,7 @@ from BaseClasses import ItemClassification, Region, Tutorial
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, Type, components, launch_subprocess
 
-from .data import FILLER_ITEMS, GAME, REGIONS, SPELLS, ZONE_KEYS
+from .data import FILLER_ITEMS, GAME, GEAR, REGIONS, SPELLS, ZONE_KEYS
 from .items import ITEM_CLASSIFICATION, ITEM_GROUPS, ITEM_TABLE, WoWItem
 from .locations import LOCATION_TABLE, WoWLocation, region_locations
 from .options import WoWOptions
@@ -118,6 +118,9 @@ class WoWWorld(World):
         pool = [self.create_item(name) for name in ZONE_KEYS]
         pool += [self.create_item(name) for name in SPELLS]
         open_slots = len(self.multiworld.get_unfilled_locations(self.player))
+        gear = [name for name, (_entry, copies) in GEAR.items() for _ in range(copies)]
+        self.random.shuffle(gear)
+        pool += [self.create_item(name) for name in gear[:max(0, open_slots - len(pool))]]
         pool += [self.create_item(self.get_filler_item_name()) for _ in range(open_slots - len(pool))]
         self.multiworld.itempool += pool
 

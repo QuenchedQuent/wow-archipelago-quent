@@ -10,6 +10,7 @@ Writes:
   - apworld/wow/gen_data.py                     regions, quests, exploration, rares, spells
   - server/lua_scripts/archipelago_data.lua     zone fence + locked spell list for the server
   - server/sql/world/archipelago_trainers.sql   removes pooled spells from class trainers
+  - server/sql/world/archipelago_quest_rewards.sql  removes gear rewards from quest locations
 
 Usage (MySQL of the Windows package must be running, e.g. via Start.bat):
   .venv\\Scripts\\python tools\\extract_data.py --data D:\\WoW\\Server\\data
@@ -72,6 +73,22 @@ QUEST_BLOCKLIST = {
 RARE_RANKS = (2, 4)    # rare elite, rare
 
 SPELL_EFFECT_LEARN_SPELL = 36
+
+# Quest reward gear (weapons/armor) becomes Archipelago items; the quest's AP check replaces it.
+ITEM_CLASS_WEAPON = 2
+ITEM_CLASS_ARMOR = 4
+# Warrior proficiencies before level 40 (no plate yet).
+WARRIOR_WEAPONS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 15, 16, 18}
+ARMOR_SCORE = {0: 3, 1: 2, 2: 3, 3: 4, 6: 3}    # misc, cloth, leather, mail, shield
+INVTYPE_CLOAK = 16
+
+# Our SQL removes rows from these tables; the originals live in backup tables so the
+# extractor always sees vanilla data, even on a server that already has our SQL applied.
+TRAINER_BACKUP = "ap_trainer_spell_backup"
+REWARD_BACKUP = "ap_quest_reward_backup"
+REWARD_COLUMNS = ([f"RewardItem{i}" for i in range(1, 5)] + [f"RewardAmount{i}" for i in range(1, 5)]
+                  + [f"RewardChoiceItemID{i}" for i in range(1, 7)]
+                  + [f"RewardChoiceItemQuantity{i}" for i in range(1, 7)])
 
 
 # ---------------------------------------------------------------------------------
@@ -252,6 +269,11 @@ def query(cur, sql: str, args: Iterable = ()):
     return cur.fetchall()
 
 
+def table_exists(cur, name: str) -> bool:
+    return bool(query(cur, "SELECT 1 FROM information_schema.TABLES "
+                           "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s", (name,)))
+
+
 def spawn_regions(cur, grid: AreaGrid, regions: Regions, table: str, event_table: str,
                   ids: Set[int]) -> Dict[int, Set[Optional[int]]]:
     """entry -> set of regions it spawns in (None = outside all regions)."""
@@ -387,6 +409,80 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
     return result
 
 
+def warrior_score(item: dict) -> Optional[int]:
+    """How much a warrior wants this item (None = can't use it)."""
+    if item["classes"] not in (-1, 0) and not (item["classes"] & CLASS_MASK):
+        return None
+    if item["races"] not in (-1, 0) and not (item["races"] & RACE_MASK):
+        return None
+    if item["cls"] == ITEM_CLASS_WEAPON:
+        return 3 if item["sub"] in WARRIOR_WEAPONS else None
+    if item["inv"] == INVTYPE_CLOAK:
+        return 3
+    return ARMOR_SCORE.get(item["sub"])
+
+
+def extract_rewards(cur, quests: Dict[int, dict]):
+    """Pick the gear each quest location gives, and which reward columns to clear."""
+    ids = ",".join(map(str, quests))
+    cols = ", ".join(REWARD_COLUMNS)
+    rows = {r[0]: r for r in query(cur, f"SELECT ID, {cols} FROM quest_template WHERE ID IN ({ids})")}
+    if table_exists(cur, REWARD_BACKUP):   # originals of rewards our SQL already removed
+        rows.update({r[0]: r for r in query(
+            cur, f"SELECT ID, {cols} FROM {REWARD_BACKUP} WHERE ID IN ({ids})")})
+    rows = [dict(zip(["ID"] + REWARD_COLUMNS, r)) for r in rows.values()]
+
+    # Items some quest needs or starts must stay where they are.
+    protected = set()
+    req_cols = [f"RequiredItemId{i}" for i in range(1, 7)] + [f"ItemDrop{i}" for i in range(1, 5)] + ["StartItem"]
+    for r in query(cur, f"SELECT {', '.join(req_cols)} FROM quest_template"):
+        protected.update(x for x in r if x)
+
+    wanted = {r[c] for r in rows for c in REWARD_COLUMNS if c.startswith(("RewardItem", "RewardChoiceItemID")) and r[c]}
+    items = {}
+    if wanted:
+        for entry, name, cls, sub, inv, classes, races, ilvl, req, quality, startquest in query(
+                cur, f"SELECT entry, name, class, subclass, InventoryType, AllowableClass, AllowableRace, "
+                     f"ItemLevel, RequiredLevel, Quality, startquest FROM item_template "
+                     f"WHERE entry IN ({','.join(map(str, wanted))})"):
+            items[entry] = dict(id=entry, name=name, cls=cls, sub=sub, inv=inv, classes=classes,
+                                races=races, ilvl=ilvl, req=req, quality=quality, startquest=startquest)
+
+    def is_gear(entry: int) -> bool:
+        it = items.get(entry)
+        return bool(it and it["cls"] in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR) and it["inv"]
+                    and not it["startquest"] and entry not in protected)
+
+    gear: List[dict] = []                 # one entry per copy in the pool
+    new_rewards: Dict[int, Dict[str, int]] = {}   # quest -> every reward column, gear removed
+    for row in rows:
+        fixed = [(row[f"RewardItem{i}"], row[f"RewardAmount{i}"]) for i in range(1, 5)]
+        choices = [(row[f"RewardChoiceItemID{i}"], row[f"RewardChoiceItemQuantity{i}"]) for i in range(1, 7)]
+        fixed_gear = [e for e, _ in fixed if e and is_gear(e)]
+        choice_gear = [e for e, _ in choices if e and is_gear(e)]
+        if not fixed_gear and not choice_gear:
+            continue
+        gear += [items[e] for e in fixed_gear]
+        scored = [(warrior_score(items[e]), items[e]["ilvl"], items[e]["quality"], e) for e in choice_gear]
+        scored = [s for s in scored if s[0] is not None]
+        if scored:
+            gear.append(items[max(scored)[3]])
+
+        # The core stops reading reward slots at the first empty one, so the remaining
+        # rewards are moved up instead of leaving gaps.
+        keep_fixed = [(e, n) for e, n in fixed if e and e not in fixed_gear]
+        keep_choice = [(e, n) for e, n in choices if e and e not in choice_gear]
+        cols: Dict[str, int] = {}
+        for i in range(4):
+            e, n = keep_fixed[i] if i < len(keep_fixed) else (0, 0)
+            cols[f"RewardItem{i + 1}"], cols[f"RewardAmount{i + 1}"] = e, n
+        for i in range(6):
+            e, n = keep_choice[i] if i < len(keep_choice) else (0, 0)
+            cols[f"RewardChoiceItemID{i + 1}"], cols[f"RewardChoiceItemQuantity{i + 1}"] = e, n
+        new_rewards[row["ID"]] = cols
+    return gear, new_rewards
+
+
 def extract_rares(cur, grid: AreaGrid, regions: Regions):
     rows = query(cur, f"SELECT entry, name, maxlevel FROM creature_template "
                       f"WHERE `rank` IN ({','.join(map(str, RARE_RANKS))})")
@@ -405,8 +501,11 @@ def extract_spells(cur, spells: Dict[int, Spell], quests: Dict[int, dict]):
     trainers = [r[0] for r in query(cur, "SELECT Id FROM trainer WHERE Type = 0 AND Requirement = %s",
                                     (CLASS_ID,))]
     pool: Dict[int, dict] = {}
+    source = "trainer_spell"
+    if table_exists(cur, TRAINER_BACKUP):
+        source = f"(SELECT * FROM trainer_spell UNION SELECT * FROM {TRAINER_BACKUP})"
     for spell_id, req_level in query(
-            cur, f"SELECT DISTINCT SpellId, ReqLevel FROM trainer_spell "
+            cur, f"SELECT DISTINCT SpellId, ReqLevel FROM {source} t "
                  f"WHERE TrainerId IN ({','.join(map(str, trainers))}) AND ReqLevel <= %s",
             (MAX_LEVEL,)):
         pool[spell_id] = dict(id=spell_id, level=req_level, source="trainer")
@@ -454,7 +553,7 @@ def spell_item_name(s: dict, base_counts: Dict[str, int]) -> str:
     return f"Spell: {s['base']}"
 
 
-def write_python(path: str, regions_out: list, spells_out: Dict[str, dict]):
+def write_python(path: str, regions_out: list, spells_out: Dict[str, dict], gear_out: Dict[str, dict]):
     lines = [
         '"""Generated by tools/extract_data.py from the AzerothCore world DB. Do not edit."""',
         "",
@@ -468,6 +567,10 @@ def write_python(path: str, regions_out: list, spells_out: Dict[str, dict]):
         "# item name -> (spell id, level it is normally available)",
         "SPELLS = " + pprint.pformat({n: (s["id"], s["level"]) for n, s in spells_out.items()},
                                      width=100, sort_dicts=False),
+        "",
+        "# Quest reward gear moved into the item pool: item name -> (item entry, copies, required level)",
+        "GEAR = " + pprint.pformat({n: (g["id"], g["copies"], g["req"]) for n, g in gear_out.items()},
+                                   width=100, sort_dicts=False),
         "",
     ]
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -494,14 +597,38 @@ ArchipelagoData = {{
 
 
 def write_sql(path: str, trainers: List[int], locked: List[int]):
+    where = (f"`TrainerId` IN ({', '.join(map(str, trainers))})\n"
+             f"  AND `SpellId` IN ({', '.join(map(str, sorted(locked)))})")
     text = f"""-- Generated by tools/extract_data.py. Do not edit.
 -- Class trainers no longer teach spells that are Archipelago items (they arrive from the
 -- multiworld instead), so players can't pay for a spell the server would take away again.
-DELETE FROM `trainer_spell` WHERE `TrainerId` IN ({', '.join(map(str, trainers))})
-  AND `SpellId` IN ({', '.join(map(str, sorted(locked)))});
+-- The original rows are kept in {TRAINER_BACKUP}, which the extractor reads, so it can
+-- be re-run on a server that already has this applied.
+CREATE TABLE IF NOT EXISTS `{TRAINER_BACKUP}` LIKE `trainer_spell`;
+INSERT IGNORE INTO `{TRAINER_BACKUP}` SELECT * FROM `trainer_spell` WHERE {where};
+DELETE FROM `trainer_spell` WHERE {where};
 """
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
+
+
+def write_reward_sql(path: str, strip: Dict[int, Dict[str, int]]):
+    cols = ", ".join(f"`{c}`" for c in REWARD_COLUMNS)
+    col_defs = ",\n  ".join(f"`{c}` INT NOT NULL DEFAULT 0" for c in REWARD_COLUMNS)
+    lines = [
+        "-- Generated by tools/extract_data.py. Do not edit.",
+        "-- Quest locations no longer hand out their gear; the Archipelago check replaces it and the",
+        "-- gear itself is shuffled into the multiworld item pool. Original rewards are kept in",
+        f"-- {REWARD_BACKUP} (first copy wins), which the extractor reads.",
+        f"CREATE TABLE IF NOT EXISTS `{REWARD_BACKUP}` (\n  `ID` INT UNSIGNED NOT NULL PRIMARY KEY,\n  {col_defs}\n);",
+        f"INSERT IGNORE INTO `{REWARD_BACKUP}` (`ID`, {cols})",
+        f"  SELECT `ID`, {cols} FROM `quest_template` WHERE `ID` IN ({', '.join(map(str, sorted(strip)))});",
+    ]
+    for qid in sorted(strip):
+        sets = ", ".join(f"`{c}` = {v}" for c, v in strip[qid].items())
+        lines.append(f"UPDATE `quest_template` SET {sets} WHERE `ID` = {qid};")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def main(argv=None):
@@ -533,7 +660,14 @@ def main(argv=None):
         quests = extract_quests(cur, grid, regions, areas)
         rares = extract_rares(cur, grid, regions)
         sp = extract_spells(cur, spells, quests)
+        gear, strip = extract_rewards(cur, quests)
     conn.close()
+
+    by_entry: Dict[int, dict] = {}
+    for g in gear:
+        by_entry.setdefault(g["id"], dict(g, copies=0))["copies"] += 1
+    gear_out = {f"Item: {n}": g for n, g in unique_names(
+        sorted(by_entry.values(), key=lambda g: (g["req"], g["id"])), lambda g: g["name"]).items()}
 
     on_grid = areas_on_grid(os.path.join(args.data, "maps"), MAP_ID) | INDOOR_AREAS
     explore = [dict(id=a.id, name=a.name, region=regions.of_area(a.id))
@@ -564,7 +698,8 @@ def main(argv=None):
         sys.exit("Duplicate spell item names")
     locked = [s["id"] for s in pool]
 
-    write_python(os.path.join(ROOT, "apworld", "wow", "gen_data.py"), regions_out, spells_out)
+    write_python(os.path.join(ROOT, "apworld", "wow", "gen_data.py"), regions_out, spells_out, gear_out)
+    write_reward_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_quest_rewards.sql"), strip)
     write_lua(os.path.join(ROOT, "server", "lua_scripts", "archipelago_data.lua"), northshire, locked)
     os.makedirs(os.path.join(ROOT, "server", "sql", "world"), exist_ok=True)
     write_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_trainers.sql"), sp["trainers"], locked)
@@ -572,6 +707,9 @@ def main(argv=None):
     print(f"Northshire areas: {sorted(northshire)}  (start position area {start_area})")
     for r in regions_out:
         print(f"{r['name']:18} quests {len(r['quests']):3}  explore {len(r['explore']):2}  rares {len(r['rares']):2}")
+    print(f"Gear: {sum(g['copies'] for g in gear_out.values())} items from {len(strip)} quests")
+    for name, g in gear_out.items():
+        print(f"  L{g['req']:<2} {g['id']:>6} x{g['copies']}  {name}")
     print(f"Spells: {len(spells_out)}")
     for name, s in spells_out.items():
         print(f"  L{s['level']:<2} {s['id']:>6}  {name}  [{s['source']}]")

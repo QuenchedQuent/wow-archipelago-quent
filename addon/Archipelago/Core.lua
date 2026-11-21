@@ -2,7 +2,7 @@
 --
 -- Server -> addon messages (prefix "AP", tab separated):
 --   S <connected> <slot> <checked> <total> <goalLevel>   status
---   L <locationId> <checked 0/1> <name>                  tracker entry
+--   L <locationId> <checked 0/1> <name> <flags> <contents>  tracker entry (+ what it holds)
 --   C <locationId>                                       location became checked
 --   I <itemName> <sender>                                item received
 --   RESET / END                                          full sync boundaries
@@ -62,7 +62,42 @@ end
 handlers.L = function(f)
     local id = tonumber(f[2])
     if not id then return end
-    AP.locations[id] = { name = f[4] or ("Location " .. id), checked = f[3] == "1", kind = AP:Kind(id) }
+    AP.locations[id] = {
+        name = f[4] or ("Location " .. id), checked = f[3] == "1", kind = AP:Kind(id),
+        flags = tonumber(f[5]) or 0, contents = f[6] or "",
+    }
+end
+
+-- Quest title as shown in WoW for a "Quest: <title>" / "Quest: <title> (<id>)" location.
+local function questTitle(locName)
+    local t = string.gsub(locName, "^Quest: ", "")
+    t = string.gsub(t, " %(%d+%)$", "")
+    return t
+end
+
+-- The location for a quest title. Chains share titles ("Westfall Stew (36)/(38)"),
+-- so prefer one that isn't checked yet.
+function AP:QuestLocation(title)
+    if not title or title == "" then return nil end
+    local found
+    for _, loc in pairs(self.locations) do
+        if loc.kind == 0 and questTitle(loc.name) == title then
+            if not loc.checked then return loc end
+            found = found or loc
+        end
+    end
+    return found
+end
+
+-- AP's item colours: progression plum, useful slate blue, trap salmon, filler cyan.
+function AP:ColorContents(loc)
+    if loc.contents == "" then return "|cff808080(unknown - is the client connected?)|r" end
+    local f = loc.flags or 0
+    local color = "00eeee"
+    if f % 2 == 1 then color = "af99ef"
+    elseif f % 4 >= 2 then color = "6d8be8"
+    elseif f % 8 >= 4 then color = "fa8072" end
+    return "|cff" .. color .. loc.contents .. "|r"
 end
 
 handlers.C = function(f)
@@ -104,7 +139,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local h = handlers[fields[1]]
         if h then
             h(fields)
-            if not AP.syncing and AP.Refresh then AP:Refresh() end
+            if not AP.syncing then
+                if AP.Refresh then AP:Refresh() end
+                if AP.RefreshQuestInfo then AP:RefreshQuestInfo() end
+            end
         end
     end
 end)
