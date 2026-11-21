@@ -34,11 +34,24 @@ The kinds are defined in [apworld/wow/data.py](apworld/wow/data.py) and [archipe
 - `/send <slot> Zone: Elwynn Forest` lets you leave Northshire. Before that, you're teleported back.
 - Restart the WoW Client mid-session. There should be no duplicate items and no lost checks.
 
-## To verify on a real server
-- All quest, area, creature and spell IDs in `data.py` were written from memory. Check them against the world DB.
-- Check the Northshire subzone IDs in `AP.ZONE_LOCKS[12].free_areas` (use `.ap where` in game).
-- Check the items listed in docs/windows-setup.md → "To verify on the first real run".
+## Game data (generated)
+Quests, exploration, rares, the zone fence and the spell pool are generated from a real
+AzerothCore world DB by [tools/extract_data.py](tools/extract_data.py). Don't hand-edit the outputs:
+- `apworld/wow/gen_data.py`: regions, quests, exploration, rares and spell items for the APWorld
+- `server/lua_scripts/archipelago_data.lua`: zone fence and locked spells for the server script
+- `server/sql/world/archipelago_trainers.sql`: removes pooled spells from class trainers
+
+To regenerate, start the server package's MySQL, then run:
+```powershell
+py -3 -m venv .venv; .venv\Scripts\pip install pymysql
+.venv\Scripts\python tools\extract_data.py --data D:\WoW\Server\data
+```
+The scope (race, class, zones, max level) is set at the top of the script.
+
+## Spell locks
+Every spell in the pool is an Archipelago item. Trainers don't teach them (see the SQL above), and
+the server script unlearns any that arrive some other way, such as class quest rewards or
+characters created earlier, unless the player received that spell from the multiworld.
 
 ## Next (see plan)
-Spell stripping (block trainer and level-up learning), vendor/trainer checks, equip and flight-path
-items, `tools/extract_data.py` to generate the data from the DB, and more classes and zones.
+Vendor/trainer checks, equip and flight-path items, and more classes and zones.

@@ -1,15 +1,16 @@
 """
-Static game data for the MVP (Human Warrior, Northshire -> Elwynn Forest -> Westfall).
+Game data for the MVP (Human Warrior, Northshire -> Elwynn Forest -> Westfall).
 
 ID ENCODING (shared contract with server/lua_scripts/archipelago.lua -- keep in sync):
     location_id = LOC_BASE  + kind * KIND_SIZE + game_id
     item_id     = ITEM_BASE + kind * KIND_SIZE + payload
 
-Hand-curated for the loop proof. All IDs below are from memory of the 3.3.5 DB and
-MUST be verified against the AzerothCore world DB; tools/extract_data.py will
-eventually generate this data instead.
+Quests, exploration, rares and spells come from gen_data.py, which
+tools/extract_data.py generates from a real AzerothCore world DB.
 """
 from typing import Dict, List, NamedTuple, Optional
+
+from . import gen_data
 
 GAME = "World of Warcraft"
 
@@ -55,118 +56,23 @@ class RegionData(NamedTuple):
 # Linear chain for the MVP; each region connects to the previous one.
 REGIONS: List[RegionData] = [
     RegionData(
-        name="Northshire Valley",
-        key_item=None,
-        levels=range(2, 7),
-        quests={
-            "A Threat Within": 783,
-            "Kobold Camp Cleanup": 7,
-            "Eagan Peltskinner": 5261,
-            "Wolves Across the Border": 33,
-            "Investigate Echo Ridge": 15,
-            "Skirmish at Echo Ridge": 21,
-            "Brotherhood of Thieves": 18,
-            "Milly Osworth": 3903,
-            "Milly's Harvest": 3904,
-            "Grape Manifest": 3905,
-            "Bounty on Garrick Padfoot": 6,
-            "Report to Goldshire": 54,
-            "Simple Letter": 3100,
-        },
-        explore={
-            "Echo Ridge Mine": 34,
-            "Northshire Vineyards": 59,
-        },
-        rares={},
-    ),
-    RegionData(
-        name="Elwynn Forest",
-        key_item="Zone: Elwynn Forest",
-        levels=range(7, 13),
-        quests={
-            "The Fargodeep Mine": 62,
-            "Gold Dust Exchange": 47,
-            "A Fishy Peril": 40,
-            "Further Concerns": 35,
-            "Find the Lost Guards": 37,
-            "Protect the Frontier": 52,
-            "Kobold Candles": 60,
-            "Shipment to Stormwind": 61,
-            "Young Lovers": 106,
-            "Speak with Gramma": 111,
-            "Note to William": 107,
-            "Lost Necklace": 85,
-            "Pie for Billy": 86,
-            "Back to Billy": 84,
-            "Goldtooth": 87,
-            "Princess Must Die!": 88,
-            "The Jasperlode Mine": 76,
-            "Westbrook Garrison Needs Help!": 239,
-            "Riverpaw Gnoll Bounty": 11,
-            "Wanted: \"Hogger\"": 176,
-            "Rest and Relaxation": 2158,
-            "Bounty on Murlocs": 46,
-            "Red Linen Goods": 83,
-            "Report to Gryan Stoutmantle": 109,
-        },
-        explore={
-            "Goldshire": 87,
-            "Fargodeep Mine": 57,
-            "Jasperlode Mine": 54,
-            "Eastvale Logging Camp": 86,
-        },
-        rares={
-            "Mother Fang": 471,
-            "Gruff Swiftbite": 100,
-            "Fedfennel": 472,
-            "Morgaine the Sly": 99,
-        },
-    ),
-    RegionData(
-        name="Westfall",
-        key_item="Zone: Westfall",
-        levels=range(13, 21),
-        quests={
-            "Westfall Stew": 36,
-            "Goretusk Liver Pie": 22,
-            "The Killing Fields": 9,
-            "The People's Militia": 12,
-            "The Forgotten Heirloom": 64,
-            "Poor Old Blanchy": 151,
-            "Red Leather Bandanas": 153,
-            "Patrolling Westfall": 102,
-            "Furlbrow's Deed": 184,
-        },
-        explore={
-            "Sentinel Hill": 108,
-            "Moonbrook": 20,
-            "Jangolode Mine": 111,
-            "Gold Coast Quarry": 113,
-        },
-        rares={},
-    ),
+        name=r["name"],
+        key_item=r["key"],
+        levels=range(r["levels"][0], r["levels"][1] + 1),
+        quests=r["quests"],
+        explore=r["explore"],
+        rares=r["rares"],
+    )
+    for r in gen_data.REGIONS
 ]
 
-# Zone keys: item name -> zone id (zone ids: Elwynn 12, Westfall 40)
-ZONE_KEYS: Dict[str, int] = {
-    "Zone: Elwynn Forest": 12,
-    "Zone: Westfall": 40,
-}
+MAX_LEVEL: int = gen_data.MAX_LEVEL
 
-# Warrior spells in the pool: name -> spell id (3.3.5)
-SPELLS: Dict[str, int] = {
-    "Spell: Charge": 100,
-    "Spell: Rend": 772,
-    "Spell: Thunder Clap": 6343,
-    "Spell: Hamstring": 1715,
-    "Spell: Bloodrage": 2687,
-    "Spell: Overpower": 7384,
-    "Spell: Battle Shout": 6673,
-    "Spell: Heroic Strike (Rank 2)": 284,
-    "Spell: Sunder Armor": 7386,
-    "Spell: Defensive Stance": 71,
-    "Spell: Taunt": 355,
-}
+# Zone keys: item name -> zone id
+ZONE_KEYS: Dict[str, int] = dict(gen_data.ZONE_KEYS)
+
+# Spells in the pool: item name -> spell id
+SPELLS: Dict[str, int] = {name: spell for name, (spell, _level) in gen_data.SPELLS.items()}
 
 # Filler: name -> item id
 FILLER_ITEMS: Dict[str, int] = {

@@ -192,6 +192,8 @@ jobs:
           Copy-Item -Recurse ac\data\sql "$pkg\source\data\sql"
           New-Item -ItemType Directory -Force "$pkg\source\data\sql\custom\db_characters" | Out-Null
           Copy-Item project\server\sql\archipelago_schema.sql "$pkg\source\data\sql\custom\db_characters\"
+          New-Item -ItemType Directory -Force "$pkg\source\data\sql\custom\db_world" | Out-Null
+          Copy-Item project\server\sql\world\*.sql "$pkg\source\data\sql\custom\db_world\"
 
           # Our pieces.
           Copy-Item -Recurse project\server\lua_scripts "$pkg\lua_scripts"

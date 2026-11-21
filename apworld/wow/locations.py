@@ -31,3 +31,5 @@ LOCATION_TABLE: Dict[str, int] = {
 }
 
 assert len(set(LOCATION_TABLE.values())) == len(LOCATION_TABLE), "duplicate location id"
+assert len(LOCATION_TABLE) == sum(len(region_locations(r, True, True)) for r in REGIONS), \
+    "duplicate location name"

@@ -4,3 +4,4 @@ apworld/wow/vendor/
 *.apworld
 dist/
 *.log
+.venv/
