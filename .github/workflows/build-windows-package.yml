@@ -1,4 +1,4 @@
-# Builds the two things players download:
+﻿# Builds the two things players download:
 #   wow.apworld                         - Archipelago world + client (PyMySQL vendored)
 #   WoW-Archipelago-Server-win64.zip    - prebuilt AzerothCore + mod-ale + portable MySQL + scripts
 #
@@ -30,7 +30,7 @@ jobs:
   apworld:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -52,7 +52,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: project
 
@@ -66,43 +66,69 @@ jobs:
           "ALE commit: $(git -C ac/modules/mod-ale rev-parse HEAD)" | Tee-Object -Append versions.txt
 
       - name: Cache Boost and MySQL
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             C:\local\boost
-            C:\tools\mysql
+            C:\tools\mysql\current
           key: deps-boost${{ env.BOOST_VERSION }}-mysql${{ env.MYSQL_VERSION }}
 
+      # Mirrors AzerothCore's own windows_build.yml, which knows the quirks of these hosts.
       - name: Install Boost and MySQL
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Boost: SourceForge serves an HTML page to user agents starting with "Mozilla",
+          # so use a non-browser UA and the downloads.sourceforge.net (https mirror) host.
           $boostDir = 'C:\local\boost'
           if (-not (Test-Path "$boostDir\boost\version.hpp")) {
             $u = $env:BOOST_VERSION -replace '\.', '_'
-            $url = "https://sourceforge.net/projects/boost/files/boost-binaries/$env:BOOST_VERSION/boost_$u-msvc-14.3-64.exe/download"
-            curl.exe -L --fail --retry 5 -A "Mozilla/5.0" -o boost.exe $url
-            if ((Get-Item boost.exe).Length -lt 50MB) { throw 'Boost download looks like an error page' }
-            Start-Process .\boost.exe -ArgumentList '/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES', "/DIR=$boostDir" -Wait
+            $boostExe = Join-Path $env:RUNNER_TEMP 'boost.exe'
+            $req = @{
+              Uri = "https://downloads.sourceforge.net/project/boost/boost-binaries/$env:BOOST_VERSION/boost_$u-msvc-14.3-64.exe"
+              OutFile = $boostExe; UserAgent = 'wow-archipelago-ci'
+              ConnectionTimeoutSeconds = 60; OperationTimeoutSeconds = 60
+            }
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              try {
+                Invoke-WebRequest @req
+                $mb = (Get-Item $boostExe).Length / 1MB
+                if ($mb -lt 50) { throw "got $([int]$mb) MB, likely an HTML page" }
+                break
+              } catch {
+                Write-Host "Boost download attempt $attempt failed: $($_.Exception.Message)"
+                if ($attempt -eq 3) { throw }
+                Start-Sleep -Seconds 15
+              }
+            }
+            $p = Start-Process $boostExe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$boostDir" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Boost installer exit code $($p.ExitCode)" }
+            if (-not (Test-Path "$boostDir\lib64-msvc-14.3")) { throw 'Boost libs missing after install' }
           }
-          $mysqlDir = 'C:\tools\mysql'
+
+          # MySQL: Oracle's archive CDN wants a browser user agent (the opposite of SourceForge).
+          $mysqlDir = 'C:\tools\mysql\current'
           if (-not (Test-Path "$mysqlDir\lib\libmysql.lib")) {
             $v = $env:MYSQL_VERSION; $mm = ($v -split '\.')[0..1] -join '.'
-            $name = "mysql-$v-winx64"
-            $ok = $false
-            foreach ($url in "https://cdn.mysql.com/Downloads/MySQL-$mm/$name.zip",
-                             "https://cdn.mysql.com/archives/mysql-$mm/$name.zip") {
-              curl.exe -L --fail --retry 3 -o mysql.zip $url
-              if ($LASTEXITCODE -eq 0) { $ok = $true; break }
-            }
-            if (-not $ok) { throw "Could not download MySQL $v" }
-            7z x mysql.zip -oC:\tools | Out-Null
-            Move-Item "C:\tools\$name" $mysqlDir
+            $zip = Join-Path $env:RUNNER_TEMP 'mysql.zip'
+            Invoke-WebRequest -Uri "https://cdn.mysql.com/archives/mysql-$mm/mysql-$v-winx64.zip" -OutFile $zip -UserAgent 'Mozilla/5.0'
+            if ((Get-Item $zip).Length -lt 50MB) { throw 'MySQL download looks wrong' }
+            New-Item -ItemType Directory -Force 'C:\tools\mysql' | Out-Null
+            7z x $zip -oC:\tools\mysql | Out-Null
+            if (Test-Path $mysqlDir) { Remove-Item -Recurse -Force $mysqlDir }
+            Rename-Item "C:\tools\mysql\mysql-$v-winx64" 'current'
+            if (-not (Test-Path "$mysqlDir\lib\libmysql.lib")) { throw 'libmysql.lib missing in MySQL zip' }
           }
-          $openssl = Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory | Select-Object -First 1
+
+          # OpenSSL: preinstalled on the runner image.
+          $openssl = @($env:OPENSSL_ROOT_DIR, 'C:\Program Files\OpenSSL', 'C:\Program Files\OpenSSL-Win64') |
+            Where-Object { $_ -and (Test-Path (Join-Path $_ 'include\openssl\opensslv.h')) } | Select-Object -First 1
           if (-not $openssl) { throw 'OpenSSL not found on runner' }
-          "BOOST_ROOT=$boostDir"                | Out-File -Append $env:GITHUB_ENV
-          "MYSQL_DIR=$mysqlDir"                 | Out-File -Append $env:GITHUB_ENV
-          "OPENSSL_ROOT_DIR=$($openssl.FullName)" | Out-File -Append $env:GITHUB_ENV
+
+          "BOOST_ROOT=$boostDir"     | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "MYSQL_DIR=$mysqlDir"      | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "OPENSSL_ROOT_DIR=$openssl" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Host "Boost: $boostDir  MySQL: $mysqlDir  OpenSSL: $openssl"
 
       - name: Configure
         run: |
