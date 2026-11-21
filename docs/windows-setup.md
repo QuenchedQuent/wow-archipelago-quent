@@ -65,11 +65,11 @@ New-Item -ItemType SymbolicLink -Path C:\Games\WoW-Archipelago-Server\lua_script
 ```
 Then `.reload ale` in game (GM account), or restart the worldserver.
 
-## To verify on the first real run
-- **Config keys:** the `.dist` key names Setup edits (`SourceDirectory`, `MySQLExecutable`, `BindIP`,
-  `ALE.ScriptPath`) are in each file. Setup appends any key that's missing, so check that the generated
-  `.conf` files look right.
-- **Worldserver flag:** the worldserver accepts `-c <path>` and loads module configs from `configs\modules\`.
-- **Accounts:** an account created by Setup can log in. That validates the SRP6 code.
-- **Client data:** the release zip layout is handled by searching for the `dbc\` folder.
-- **Release size:** check the zip size, aiming for roughly 300-500 MB without the map data.
+## Verified on the first real run (2026-11-21, run 44945822646)
+- Setup: configs, `-c` flag, module config, DB auto-setup, our schema, client-data download.
+- An account created by Setup logs in, so the SRP6 code is correct.
+- Quest checks reach AP, items (spell, zone key) are granted, and progress survives a logout.
+- Release zip is 274 MB without the map data.
+- **Windows runtime gotchas** (both are now enforced by the workflow): bundle the *newest* MSVC CRT
+  (an old one crashes with 0xC0000005 in msvcp140), and ship OpenSSL's `legacy.dll` next to the exe
+  (otherwise there's a startup assertion that only shows on stderr).
