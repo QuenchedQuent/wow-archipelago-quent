@@ -11,17 +11,20 @@ on:
   workflow_dispatch:
     inputs:
       azerothcore_ref:
-        description: azerothcore-wotlk branch/tag/commit
-        default: master
+        description: azerothcore-wotlk branch/tag/commit (blank = pinned known-good commit)
+        default: ''
       ale_ref:
-        description: mod-ale branch/tag/commit
-        default: master
+        description: mod-ale branch/tag/commit (blank = pinned known-good commit)
+        default: ''
   push:
     tags: ['v*']
 
+# Known-good versions. Releases (tag pushes) always build these, so every release is
+# reproducible. To upgrade: run the workflow with "master" in the inputs, test the
+# package, then update these to the commits printed in versions.txt.
 env:
-  AC_REF: ${{ inputs.azerothcore_ref || 'master' }}
-  ALE_REF: ${{ inputs.ale_ref || 'master' }}
+  AC_REF: ${{ inputs.azerothcore_ref || '437ac413284309bccdcff765b0427c862b3a38c6' }}
+  ALE_REF: ${{ inputs.ale_ref || '84b85cc55980dbf67d596f3d5cb34ded10c59102' }}
   BOOST_VERSION: 1.87.0          # matches AzerothCore's own Windows CI
   MYSQL_VERSION: 8.4.9           # MySQL 8.4 LTS; must be 8.x (AzerothCore doesn't support newer majors)
   PYMYSQL_VERSION: 1.1.1
@@ -164,7 +167,7 @@ jobs:
           # msvcp140.dll) when run against an older runtime. VS ships several CRT folders.
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $msvcp = Get-ChildItem "$vs\VC\Redist\MSVC" -Recurse -Filter 'msvcp140.dll' |
-                   Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC14\d\.CRT\\' -and $_.FullName -notmatch 'onecore|debug' } |
+                   Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC14\d\.CRT\\' -and $_.FullName -notmatch 'onecore|debug|spectre' } |
                    Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending | Select-Object -First 1
           if (-not $msvcp) { throw 'MSVC x64 CRT redist not found' }
           $crt = $msvcp.Directory

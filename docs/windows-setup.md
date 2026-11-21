@@ -44,11 +44,16 @@ You don't need any compilers. GitHub's Windows runners build everything:
 1. Push this project to a GitHub repo.
 2. Either go to Actions → **Build Windows package** → *Run workflow* (artifacts only), or push a tag:
    `git tag v0.1.0 && git push --tags`. That also creates a GitHub Release with both files.
-3. The build takes about 1-2 hours (AzerothCore plus tools on a 4-core runner).
-   `versions.txt` in the zip records the exact AzerothCore and ALE commits.
+3. The build takes about 20-25 minutes. Before zipping, it smoke-tests the package: worldserver,
+   authserver and mysqld must start using only the bundled DLLs.
 
 Workflow: [.github/workflows/build-windows-package.yml](../.github/workflows/build-windows-package.yml).
-Pin `azerothcore_ref`/`ale_ref` to known-good commits once something works, so releases are reproducible.
+
+**Versions are pinned.** `AC_REF`/`ALE_REF` at the top of the workflow are known-good commits, and
+releases always build those. To upgrade AzerothCore or ALE:
+1. Run the workflow manually with `master` in the inputs.
+2. Test the resulting package.
+3. Copy the commits from its `versions.txt` into `AC_REF`/`ALE_REF`.
 
 ## Developing locally on Windows
 Use the same package for your own server. Point the volume at your working copy by replacing the
