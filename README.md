@@ -66,9 +66,16 @@ characters created earlier, unless the player received that spell from the multi
   objectives are (mobs, objects, item drops, vendors, places to reach), its prerequisites, and
   the region owning its minimum level. Quests whose objectives are only outside our zones are
   dropped. Either/or quests (exclusive groups) are one location that any of them completes.
-- **Zone keys** are progression. `zone_key_placement`: `early` (default) puts each key on a
-  quick quest near the start of the zone before it, in your own world; `anywhere` randomizes
-  normally; `start_with` gives you both.
+- **Zone keys** are progression. `zone_key_placement`: `anywhere` (default) shuffles them into
+  the multiworld; `start_with` gives you both.
+- **Combat logic** (`combat_logic`): how many spells and gear items a zone expects.
+  `normal` (default): Elwynn needs 2 spells, Westfall 5 spells + 2 gear. `easy`: 4 spells + 1
+  gear, then 9 spells + 4 gear. `off`: keys only. When on, spells and gear are progression;
+  when off they are useful.
+- **Fence:** only Northshire (until you have the Elwynn key), Elwynn Forest, Stormwind City
+  (Elwynn key) and Westfall (Westfall key) are in the randomizer. Other zones, other
+  continents, the tram and dungeons are fenced off. A fenced player is sent back to the last
+  spot they stood inside the fence (Northshire Abbey if there is none yet).
 - **Grindy checks hold only filler:** rares (long respawns), and the last 2 levels of each
   region (Reach Level and trainer checks), so no one's progression waits on them.
 

@@ -32,9 +32,12 @@ AP.MAX_LEVEL_CHECK = 60
 -- tools/extract_data.py). It is read lazily, so script load order doesn't matter.
 -- Fallback fence if the data file is missing.
 AP.FALLBACK_ZONE_LOCKS = {
-    [12] = { name = "Elwynn Forest", free_areas = { [9] = true, [23] = true, [24] = true, [34] = true, [59] = true } },
-    [40] = { name = "Westfall" },
+    [12] = { name = "Elwynn Forest", key = 12, key_name = "Zone: Elwynn Forest",
+             free_areas = { [9] = true, [23] = true, [24] = true, [34] = true, [59] = true } },
+    [1519] = { name = "Stormwind City", key = 12, key_name = "Zone: Elwynn Forest" },
+    [40] = { name = "Westfall", key = 40, key_name = "Zone: Westfall" },
 }
+AP.FALLBACK_FENCE_MAP = 0
 
 local function zoneLocks()
     return (ArchipelagoData and ArchipelagoData.zone_locks) or AP.FALLBACK_ZONE_LOCKS
@@ -47,7 +50,11 @@ end
 local function trainerChecks()
     return (ArchipelagoData and ArchipelagoData.trainer_checks) or {}
 end
--- Where fenced players are sent (Northshire Abbey, human start).
+local function fenceMap()
+    return (ArchipelagoData and ArchipelagoData.fence_map) or AP.FALLBACK_FENCE_MAP
+end
+
+-- Where fenced players go if there is no last allowed position yet (Northshire Abbey).
 AP.RETURN_POINT = { map = 0, x = -8949.95, y = -132.49, z = 83.53, o = 0.0 }
 
 -- Eluna hook ids
@@ -232,14 +239,42 @@ end
 -- zone fence
 ---------------------------------------------------------------------------------------
 
-local function enforceZone(player, st)
-    if player:IsGM() then return end
+-- nil if the player may be here, else the reason they may not.
+local function fenceReason(player, st)
+    if player:GetMapId() ~= fenceMap() then
+        return "That's outside this randomizer's world."
+    end
     local zone, area = player:GetZoneId(), player:GetAreaId()
+    if zone == 0 then return nil end     -- no zone (open sea, map edges): leave it alone
     local lock = zoneLocks()[zone]
-    if not lock or st.zones[zone] then return end
-    if lock.free_areas and lock.free_areas[area] then return end
-    local p = AP.RETURN_POINT
-    say(player, "You need |cffffff00Zone: " .. lock.name .. "|r to go there.")
+    if not lock then
+        return "That zone is outside this randomizer's world."
+    end
+    if st.zones[lock.key or zone] or (lock.free_areas and lock.free_areas[area]) then
+        return nil
+    end
+    return "You need |cffffff00" .. (lock.key_name or ("Zone: " .. lock.name)) .. "|r to go there."
+end
+
+-- Fenced players go back to where they last stood inside the fence, so walking into a
+-- locked zone from Elwynn doesn't send you all the way back to Northshire.
+AP.FENCE_COOLDOWN_TICKS = 3   -- let a fence teleport land before checking again
+
+local function enforceZone(player, st)
+    if player:IsGM() or st.ticks < (st.fenceUntil or 0) then return end
+    local reason = fenceReason(player, st)
+    if not reason then
+        if not player:IsFalling() and not player:IsDead() then
+            st.safe = { map = player:GetMapId(), x = player:GetX(), y = player:GetY(),
+                        z = player:GetZ(), o = player:GetO() }
+        end
+        return
+    end
+    -- st.safe is always inside the fence: keys are never taken away, and relinking to a
+    -- new seed rebuilds the state (and forgets st.safe).
+    local p = st.safe or AP.RETURN_POINT
+    st.fenceUntil = st.ticks + AP.FENCE_COOLDOWN_TICKS
+    say(player, reason)
     player:Teleport(p.map, p.x, p.y, p.z, p.o)
 end
 

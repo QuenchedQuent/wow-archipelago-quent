@@ -53,7 +53,6 @@ class RegionData(NamedTuple):
     rares: Dict[str, int]            # creature name -> entry
     trainer: Dict[str, int]          # "Trainer: <spell>" -> spell id, bought at a class trainer
     trainer_levels: Dict[str, int]   # "Trainer: <spell>" -> level it needs
-    early: List[str]                 # quick quest locations near the start of the region
 
 
 # Linear chain for the MVP; each region connects to the previous one.
@@ -69,7 +68,6 @@ REGIONS: List[RegionData] = [
         trainer={name: spell for name, (spell, level, _cost) in gen_data.TRAINER_CHECKS.items()
                  if r["levels"][0] <= max(level, gen_data.REGIONS[0]["levels"][0]) <= r["levels"][1]},
         trainer_levels={name: level for name, (_spell, level, _cost) in gen_data.TRAINER_CHECKS.items()},
-        early=[f"Quest: {title}" for title in r["early"]],
     )
     for r in gen_data.REGIONS
 ]
@@ -115,5 +113,3 @@ def is_grindy_level(region: RegionData, level: int) -> bool:
 
 def level_location_name(level: int) -> str:
     return f"Reach Level {level}"
-assert all(prev.early for prev, r in zip(REGIONS, REGIONS[1:]) if r.key_item), \
-    "a region with a Zone key needs early quests in the region before it"

@@ -28,16 +28,26 @@ class IncludeTrainerChecks(DefaultOnToggle):
 
 
 class ZoneKeyPlacement(Choice):
-    """Where the Zone keys (Elwynn Forest, Westfall) are placed. They are always progression.
-    Early: each key is on one of the first quests of the zone before it, in your own world,
-    so you never wait on other players or grind for it.
-    Anywhere: normal randomization; a key may be in another player's world.
+    """Where the Zone keys (Elwynn Forest, Westfall) are. They are always progression.
+    Anywhere: shuffled into the multiworld like any other item (any player's game).
     Start With: you start with every Zone key."""
     display_name = "Zone Key Placement"
-    option_early = 0
-    option_anywhere = 1
-    option_start_with = 2
+    option_anywhere = 0
+    option_start_with = 1
     default = 0
+
+
+class CombatLogic(Choice):
+    """How many class spells and gear items the logic expects before a zone counts as
+    reachable. Spells and gear become progression items when this is on.
+    Off: only Zone keys matter.
+    Normal: Elwynn Forest needs 2 spells; Westfall needs 5 spells and 2 gear.
+    Easy: Elwynn Forest needs 4 spells and 1 gear; Westfall needs 9 spells and 4 gear."""
+    display_name = "Combat Logic"
+    option_off = 0
+    option_normal = 1
+    option_easy = 2
+    default = 1
 
 
 @dataclass
@@ -47,3 +57,4 @@ class WoWOptions(PerGameCommonOptions):
     include_rares: IncludeRares
     include_trainer_checks: IncludeTrainerChecks
     zone_key_placement: ZoneKeyPlacement
+    combat_logic: CombatLogic
