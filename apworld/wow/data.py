@@ -1,6 +1,7 @@
 """
-Game data: Northshire -> Elwynn Forest -> Westfall, for any Alliance race and any class but
-the Death Knight. A slot's quests, spells and trainer checks depend on its race and class.
+Game data: levels 1-20 for any race and any class but the Death Knight. Each race plays the
+chain of zones of its own starting area (e.g. Northshire -> Elwynn Forest -> Westfall for
+humans); a slot's quests, spells and trainer checks depend on its race and class.
 
 ID ENCODING (shared contract with server/lua_scripts/archipelago.lua -- keep in sync):
     location_id = LOC_BASE  + kind * KIND_SIZE + game_id
@@ -53,9 +54,14 @@ CLASSES: Dict[int, str] = dict(gen_data.CLASSES)
 # Race/class combinations that exist in 3.3.5 (Death Knights aside).
 VALID_CLASSES: Dict[int, Tuple[int, ...]] = {
     1: (1, 2, 4, 5, 8, 9),       # Human: warrior, paladin, rogue, priest, mage, warlock
+    2: (1, 3, 4, 7, 9),          # Orc: warrior, hunter, rogue, shaman, warlock
     3: (1, 2, 3, 4, 5),          # Dwarf: warrior, paladin, hunter, rogue, priest
     4: (1, 3, 4, 5, 11),         # Night Elf: warrior, hunter, rogue, priest, druid
+    5: (1, 4, 5, 8, 9),          # Undead: warrior, rogue, priest, mage, warlock
+    6: (1, 3, 7, 11),            # Tauren: warrior, hunter, shaman, druid
     7: (1, 4, 8, 9),             # Gnome: warrior, rogue, mage, warlock
+    8: (1, 3, 4, 5, 7, 8),       # Troll: warrior, hunter, rogue, priest, shaman, mage
+    10: (2, 3, 4, 5, 8, 9),      # Blood Elf: paladin, hunter, rogue, priest, mage, warlock
     11: (1, 2, 3, 5, 7, 8),      # Draenei: warrior, paladin, hunter, priest, shaman, mage
 }
 
@@ -70,27 +76,35 @@ class RegionData(NamedTuple):
     rares: Dict[str, int]            # creature name -> entry
 
 
-# Linear chain; each region connects to the previous one.
-REGIONS: List[RegionData] = [
-    RegionData(
-        name=r["name"],
-        key_item=r["key"],
-        levels=range(r["levels"][0], r["levels"][1] + 1),
-        explore=r["explore"],
-        rares=r["rares"],
+class ChainData(NamedTuple):
+    name: str                        # starting area
+    races: List[int]                 # races that start there
+    regions: List[RegionData]        # linear: each region connects to the previous one
+    trainer_region: Dict[int, int]   # class -> earliest region with one of its trainers
+
+
+CHAINS: List[ChainData] = [
+    ChainData(
+        name=c["name"],
+        races=list(c["races"]),
+        regions=[RegionData(name=r["name"], key_item=r["key"],
+                            levels=range(r["levels"][0], r["levels"][1] + 1),
+                            explore=r["explore"], rares=r["rares"]) for r in c["regions"]],
+        trainer_region=dict(c["trainer_region"]),
     )
-    for r in gen_data.REGIONS
+    for c in gen_data.CHAINS
 ]
+RACE_CHAIN: Dict[int, int] = {race: i for i, c in enumerate(CHAINS) for race in c.races}
 
 MAX_LEVEL: int = gen_data.MAX_LEVEL
 
 
-def level_region(level: int) -> int:
+def level_region(chain: ChainData, level: int) -> int:
     """Index of the region that owns `level` (below the first region's levels: the first)."""
-    for i, r in enumerate(REGIONS):
+    for i, r in enumerate(chain.regions):
         if level <= r.levels[-1]:
             return i
-    return len(REGIONS) - 1
+    return len(chain.regions) - 1
 
 
 # The last levels of a region are a grind with that region's mobs alone.
@@ -106,25 +120,27 @@ def is_grindy_level(region: RegionData, level: int) -> bool:
 class QuestData(NamedTuple):
     name: str        # location name without the "Quest: " prefix
     id: int
-    region: int
+    regions: Dict[int, int]   # chain index -> region (only chains where it can be done)
     races: int       # race mask, 0 = any
     classes: int     # class mask, 0 = any
     prev: int        # prerequisite quest id, 0 = none
     group: int       # exclusive group, 0 = none
 
 
-QUESTS: List[QuestData] = [QuestData(**q) for q in gen_data.QUESTS]
+QUESTS: List[QuestData] = [QuestData(**dict(q, regions=dict(q["regions"]))) for q in gen_data.QUESTS]
 QUESTS_BY_ID: Dict[int, QuestData] = {q.id: q for q in QUESTS}
 
 
 def slot_quests(race: int, cls: int) -> List[Tuple[QuestData, int]]:
-    """(quest, region) for each quest location of a character. A quest counts when its
-    race/class masks allow the character and its prerequisite is available (any member of the
-    prerequisite's exclusive group will do, as in the core). The members of an exclusive group
-    the character can take are one location (lowest id) in the earliest member's region."""
+    """(quest, region) for each quest location of a character, in its race's chain. A quest
+    counts when it can be done in the chain, its race/class masks allow the character and its
+    prerequisite is available (any member of the prerequisite's exclusive group will do, as in
+    the core). The members of an exclusive group the character can take are one location
+    (lowest id) in the earliest member's region."""
+    chain = RACE_CHAIN[race]
     race_bit, class_bit = 1 << (race - 1), 1 << (cls - 1)
-    fits = {q.id for q in QUESTS
-            if (not q.races or q.races & race_bit) and (not q.classes or q.classes & class_bit)}
+    fits = {q.id for q in QUESTS if chain in q.regions
+            and (not q.races or q.races & race_bit) and (not q.classes or q.classes & class_bit)}
     members: Dict[int, List[int]] = {}
     for q in QUESTS:
         if q.group:
@@ -150,36 +166,40 @@ def slot_quests(race: int, cls: int) -> List[Tuple[QuestData, int]]:
                 continue
             done_groups.add(q.group)
             mine = [QUESTS_BY_ID[m] for m in members[q.group] if m in taken]
-            out.append((min(mine, key=lambda m: m.id), min(m.region for m in mine)))
+            out.append((min(mine, key=lambda m: m.id), min(m.regions[chain] for m in mine)))
         else:
-            out.append((q, q.region))
+            out.append((q, q.regions[chain]))
     return out
 
 
 # --- items ---------------------------------------------------------------------------------
 
-# Zone keys: item name -> zone id
+# Zone keys (all chains): item name -> zone id
 ZONE_KEYS: Dict[str, int] = dict(gen_data.ZONE_KEYS)
+
+
+def chain_zone_keys(chain: ChainData) -> List[str]:
+    return [r.key_item for r in chain.regions if r.key_item]
 
 # Spell items (every class): item name -> spell id
 SPELLS: Dict[str, int] = dict(gen_data.SPELLS)
 # A class's spell pool: class -> {item name: level}
 CLASS_SPELLS: Dict[int, Dict[str, int]] = {c: dict(s) for c, s in gen_data.CLASS_SPELLS.items()}
 
-# Trainer checks: class -> {location name: (spell id, level, copper)}; only classes with a
-# trainer in our zones. TRAINER_REGION: the earliest region with one of its trainers.
+# Trainer checks: class -> {location name: (spell id, level, copper)}.
 TRAINER_CHECKS: Dict[int, Dict[str, Tuple[int, int, int]]] = {
     c: dict(t) for c, t in gen_data.TRAINER_CHECKS.items()}
-TRAINER_REGION: Dict[int, int] = dict(gen_data.TRAINER_REGION)
 
 
-def trainer_locations(cls: int) -> List[Tuple[str, int, int, int]]:
-    """(location name, spell id, level, region) for a class's trainer checks: in the region
-    owning the spell's level, or the first region with a trainer of that class if later."""
-    if cls not in TRAINER_CHECKS:
+def trainer_locations(race: int, cls: int) -> List[Tuple[str, int, int, int]]:
+    """(location name, spell id, level, region) for a character's trainer checks: in the region
+    of its chain owning the spell's level, or the first region with a trainer of its class if
+    that is later. None if the chain has no trainer of the class."""
+    chain = CHAINS[RACE_CHAIN[race]]
+    if cls not in TRAINER_CHECKS or cls not in chain.trainer_region:
         return []
-    first = TRAINER_REGION[cls]
-    return [(name, spell, level, max(level_region(level), first))
+    first = chain.trainer_region[cls]
+    return [(name, spell, level, max(level_region(chain, level), first))
             for name, (spell, level, _cost) in TRAINER_CHECKS[cls].items()]
 
 

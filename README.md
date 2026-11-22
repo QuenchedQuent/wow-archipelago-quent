@@ -1,22 +1,32 @@
 # WoW Archipelago
 
 Archipelago randomizer for World of Warcraft 3.3.5 on an AzerothCore + ALE (Lua engine) private
-server, with content limited to classic zones. It covers Northshire, Elwynn Forest and Westfall
-(levels 1-20) for any Alliance race and any class but the Death Knight.
+server, covering levels 1-20 for any race and any class but the Death Knight (it starts at level
+55 in its own zone).
 
 ## Characters
-Each slot picks `character_race` (human, dwarf, night elf, gnome, draenei) and `character_class`
-(warrior, paladin, hunter, rogue, priest, shaman, mage, warlock, druid); generation rejects
-combinations the game doesn't allow. Non-human races start in their own zone, which is outside
-the fence, so their first login brings them to Northshire. Horde races aren't supported: Elwynn
-Forest is hostile to them. Death Knights start at level 55 in their own zone.
+Each slot picks `character_race` and `character_class`; generation rejects combinations the game
+doesn't allow. Each race plays the zones around its own starting area, a typical 1-20 path in
+three steps: the starting valley (open from the start), the zone around it with its capital
+(needs that zone's key), then the usual next zone (needs its key):
 
-The extractor keeps every quest a playable race/class can take, with its race and class masks;
-the APWorld picks a slot's quests (a quest counts when the masks allow the character and its
+| Races | Starting valley | Zone (+ city) | Next zone |
+|---|---|---|---|
+| Human | Northshire Valley | Elwynn Forest (Stormwind) | Westfall |
+| Dwarf, Gnome | Coldridge Valley | Dun Morogh (Ironforge) | Loch Modan |
+| Night Elf | Shadowglen | Teldrassil (Darnassus) | Darkshore |
+| Draenei | Ammen Vale | Azuremyst Isle (The Exodar) | Bloodmyst Isle |
+| Orc, Troll | Valley of Trials | Durotar (Orgrimmar) | The Barrens |
+| Tauren | Red Cloud Mesa | Mulgore (Thunder Bluff) | The Barrens |
+| Undead | Deathknell | Tirisfal Glades (Undercity) | Silverpine Forest |
+| Blood Elf | Sunstrider Isle | Eversong Woods (Silvermoon City) | Ghostlands |
+
+The chains are `CHAIN_DEFS` in the extractor. The extractor classifies every quest, exploration
+spot, rare and trainer per chain, and keeps each quest's race and class masks. The APWorld picks
+a slot's quests from its race's chain (a quest counts when the masks allow the character and its
 prerequisite is available). Spells, trainer checks and trainer NPCs are per class. Spells taught
-by class quests anywhere up to level 20 are pooled too (pet taming, Bear Form, stances, totems),
-since those quests are often in racial starting zones outside the fence. The client only links a
-character of the slot's race and class.
+by class quests anywhere up to level 20 are pooled too (pet taming, Bear Form, stances, totems).
+The client only links a character of the slot's race and class.
 
 ```
 AP Server <-WebSocket-> WoW Client (in AP Launcher) <-MySQL ap_* tables-> server script (ALE) <-addon msgs-> addon (UI)
@@ -46,7 +56,8 @@ The kinds are defined in [apworld/wow/data.py](apworld/wow/data.py) and [archipe
 ## Loop test
 - Complete "A Threat Within". The check should show on the AP server within about 5 seconds.
 - `/send <slot> Spell: Charge` on the AP server console. The character should learn Charge and the addon feed should show it.
-- `/send <slot> Zone: Elwynn Forest` lets you leave Northshire. Before that, you're teleported back.
+- `/send <slot> Zone: Elwynn Forest` (a human's first key) lets you leave Northshire. Before that,
+  you're teleported back.
 - Restart the WoW Client mid-session. There should be no duplicate items and no lost checks.
 
 ## Game data (generated)
@@ -74,19 +85,19 @@ the server script unlearns any that arrive some other way, such as class quest r
 characters created earlier, unless the player received that spell from the multiworld.
 
 ## Logic
-- **Regions:** Northshire, then Elwynn Forest (needs `Zone: Elwynn Forest`), then Westfall
-  (needs `Zone: Westfall`). Each region owns a level range; your level is limited by which
-  zones' mobs you can reach.
+- **Regions:** your chain's valley (levels 2-6), its zone (7-12, needs that zone's key), then the
+  next zone (13-20, needs its key). Your level is limited by which zones' mobs you can reach.
 - **Quest regions:** a quest belongs to the latest of: where it starts and ends, where its
   objectives are (mobs, objects, item drops, vendors, places to reach), its prerequisites, and
   the region owning its minimum level. Quests whose objectives are only outside our zones are
   dropped. Either/or quests (exclusive groups) are one location that any of them completes.
-- **Zone keys** are progression. `zone_key_placement`: `anywhere` (default) shuffles them into
-  the multiworld; `start_with` gives you both.
-- **Fence:** only Northshire (until you have the Elwynn key), Elwynn Forest, Stormwind City
-  (Elwynn key) and Westfall (Westfall key) are in the randomizer. Other zones, other
-  continents, the tram and dungeons are fenced off. A fenced player is sent back to the last
-  spot they stood inside the fence (Northshire Abbey if there is none yet).
+- **Zone keys** (two per chain, e.g. `Zone: Dun Morogh` and `Zone: Loch Modan`) are progression.
+  `zone_key_placement`: `anywhere` (default) shuffles them into the multiworld; `start_with`
+  gives you both.
+- **Fence:** only your chain's zones are in the randomizer: the valley, then the zone and its
+  capital (first key), then the next zone (second key). Other zones, other maps, boats, trams
+  and dungeons are fenced off. A fenced player is sent back to the last spot they stood inside
+  the fence (their race's start position if there is none yet).
 - **Grindy checks hold only filler:** rares (long respawns), and the last 2 levels of each
   region (Reach Level and trainer checks), so no one's progression waits on them.
 
@@ -115,8 +126,8 @@ each check holds (`addon/Archipelago/TrainerChecks.lua` wraps the trainer API th
 Blizzard_TrainerUI reads). Training one sends `BUY <spell>` to the server script, which checks
 that you are at a trainer of your class and have the level and money, then takes the money and
 sends the check. In logic, a check sits in the region that owns its level, or the first region
-with a trainer of your class if that is later (hunter, shaman and druid trainers are in
-Stormwind, so their checks need the Elwynn key). Turn the checks off with
+with a trainer of your class if that is later (e.g. a human hunter's trainers are in
+Stormwind, so those checks need the Elwynn key). Turn the checks off with
 the `include_trainer_checks` option.
 
 ## Quest rewards
@@ -127,5 +138,4 @@ and items other quests need, are left alone. The client scouts every location, a
 shows what each quest holds next to the quest window and the quest log.
 
 ## Next (see plan)
-Vendor checks, equip and flight-path items, Horde starting zones, and more zones. Shaman totem
-spells still need their totem items, which the class quests normally hand out.
+Vendor checks, equip and flight-path items, and zones past level 20.

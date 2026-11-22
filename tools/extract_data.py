@@ -32,37 +32,69 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------------
 # Scope of the MVP. Everything else is derived from the data.
 # ---------------------------------------------------------------------------------
-# Playable characters: the Alliance races (Elwynn Forest is hostile to the Horde; other races
-# are fenced into Northshire from their own start) and every class but the Death Knight,
-# which starts at level 55 in its own zone. Quests, spells and trainer checks are kept per
-# race/class; the APWorld picks a slot's own from its race and class options.
-RACES = {1: "Human", 3: "Dwarf", 4: "Night Elf", 7: "Gnome", 11: "Draenei"}
+# Playable characters: every race, and every class but the Death Knight (it starts at level 55
+# in its own zone). Each race plays the chain of zones of its own starting area (CHAIN_DEFS).
+# Quests, spells and trainer checks are kept per race/class/chain; the APWorld picks a slot's
+# own from its race and class options.
+RACES = {1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead", 6: "Tauren", 7: "Gnome",
+         8: "Troll", 10: "Blood Elf", 11: "Draenei"}
 CLASSES = {1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest", 7: "Shaman",
            8: "Mage", 9: "Warlock", 11: "Druid"}
 RACE_MASK = sum(1 << (r - 1) for r in RACES)       # quests some playable race can take
 CLASS_MASK = sum(1 << (c - 1) for c in CLASSES)
 CLASS_QUEST_SORTS = {-81: 1, -141: 2, -261: 3, -162: 4, -262: 5, -82: 7, -161: 8, -61: 9, -263: 11}
 MAX_LEVEL = 20
-MAP_ID = 0           # Eastern Kingdoms
 
-NORTHSHIRE_AREA = 9
-ELWYNN_ZONE = 12
-WESTFALL_ZONE = 40
-STORMWIND_ZONE = 1519
+# Levels of the three steps of every chain: starting valley, the zone around it, the next zone.
+LEVELS = [(2, 6), (7, 12), (13, MAX_LEVEL)]
 
-# Ordered regions. A point/quest belongs to the first region whose test matches.
-#   zones: whole zones counted in this region; areas: specific areas (checked first).
-REGION_DEFS = [
-    {"name": "Northshire Valley", "key": None, "levels": (2, 6),
-     "areas": "NORTHSHIRE", "zones": []},
-    {"name": "Elwynn Forest", "key": "Zone: Elwynn Forest", "levels": (7, 12),
-     "areas": None, "zones": [ELWYNN_ZONE, STORMWIND_ZONE]},
-    {"name": "Westfall", "key": "Zone: Westfall", "levels": (13, MAX_LEVEL),
-     "areas": None, "zones": [WESTFALL_ZONE]},
+# One chain of zones per starting area, for a typical level 1-20 path: the starting valley
+# (always open), the zone around it with its capital city (key: that zone), then the usual
+# next zone (key: that zone). The valley's sub-areas are often parented to the zone in
+# AreaTable, so they are listed (checked by name). steps: (zone, [cities counted with it]).
+CHAIN_DEFS = [
+    dict(name="Northshire", races=[1], map=0, steps=[(12, [1519]), (40, [])],
+         valley={9: "Northshire Valley", 23: "Northshire River", 24: "Northshire Abbey",
+                 34: "Echo Ridge Mine", 59: "Northshire Vineyards"}),
+    dict(name="Coldridge Valley", races=[3, 7], map=0, steps=[(1, [1537]), (38, [])],
+         valley={132: "Coldridge Valley", 77: "Anvilmar", 800: "Coldridge Pass"}),
+    dict(name="Shadowglen", races=[4], map=1, steps=[(141, [1657]), (148, [])],
+         valley={188: "Shadowglen", 256: "Aldrassil", 257: "Shadowthread Cave", 258: "Fel Rock"}),
+    dict(name="Ammen Vale", races=[11], map=530, steps=[(3524, [3557]), (3525, [])],
+         valley={3526: "Ammen Vale", 3527: "Crash Site", 3528: "Silverline Lake",
+                 3529: "Nestlewood Thicket", 3530: "Shadow Ridge", 3560: "Ammen Fields"}),
+    dict(name="Valley of Trials", races=[2, 8], map=1, steps=[(14, [1637]), (17, [])],
+         valley={363: "Valley of Trials", 365: "Burning Blade Coven"}),
+    dict(name="Camp Narache", races=[6], map=1, steps=[(215, [1638]), (17, [])],
+         valley={220: "Red Cloud Mesa", 221: "Camp Narache", 358: "Brambleblade Ravine",
+                 818: "Palemane Rock"}),
+    dict(name="Deathknell", races=[5], map=0, steps=[(85, [1497]), (130, [])],
+         valley={154: "Deathknell", 155: "Night Web's Hollow"}),
+    dict(name="Sunstrider Isle", races=[10], map=530, steps=[(3430, [3487]), (3433, [])],
+         valley={3431: "Sunstrider Isle", 3432: "Shrine of Dath'Remar", 3485: "Falthrien Academy"}),
 ]
-# Zones that get explore checks (Stormwind is a city: no exploration checks there).
-EXPLORE_ZONES = {ELWYNN_ZONE, WESTFALL_ZONE}
-ZONE_KEYS = {"Zone: Elwynn Forest": ELWYNN_ZONE, "Zone: Westfall": WESTFALL_ZONE}
+
+
+class Chain:
+    """A chain of regions: [valley, zone + city, next zone], with the AreaTable names."""
+
+    def __init__(self, index: int, d: dict, areas: Dict[int, "Area"]):
+        for aid, name in d["valley"].items():
+            if areas[aid].name != name:
+                raise ValueError(f"Area {aid} is '{areas[aid].name}', expected '{name}'")
+        self.index, self.name, self.races, self.map = index, d["name"], d["races"], d["map"]
+        self.valley = set(d["valley"]) | {a.id for a in areas.values() if a.parent in d["valley"]}
+        self.regions = [dict(name=areas[next(iter(d["valley"]))].name, key=None, levels=LEVELS[0],
+                             zones=[], explore=[])]
+        for (zone, cities), levels in zip(d["steps"], LEVELS[1:]):
+            name = areas[zone].name
+            self.regions.append(dict(name=name, key=f"Zone: {name}", levels=levels,
+                                     zones=[zone] + cities, explore=[zone]))
+        self.first_zone = d["steps"][0][0]    # the zone the valley lies in
+
+    def zone_keys(self) -> Dict[str, int]:
+        return {r["key"]: r["zones"][0] for r in self.regions if r["key"]}
+
 
 # Quest filters
 QUEST_FLAG_TRACKING = 0x400
@@ -244,38 +276,26 @@ def load_area_triggers(dbc_dir: str) -> Dict[int, Tuple[int, float, float]]:
 # Region classification
 # ---------------------------------------------------------------------------------
 class Regions:
-    def __init__(self, areas: Dict[int, Area], northshire: Set[int]):
+    """Which region of a chain an area belongs to (None: outside the chain)."""
+
+    def __init__(self, areas: Dict[int, Area], chain: Chain):
         self.areas = areas
-        self.northshire = northshire
+        self.chain = chain
+        self.map = chain.map
 
     def of_area(self, area_id: int) -> Optional[int]:
-        if area_id in self.northshire:
+        if area_id in self.chain.valley:
             return 0
         a = self.areas.get(area_id)
         if not a:
             return None
-        for i, r in enumerate(REGION_DEFS):
+        for i, r in enumerate(self.chain.regions):
             if a.zone in r["zones"] or a.id in r["zones"]:
                 return i
         return None
 
 
-# Northshire's sub-areas are parented to Elwynn Forest in AreaTable, not to Northshire,
-# so they are listed explicitly (checked by name below). Matches the in-game fence test.
-NORTHSHIRE_SUBAREAS = {23: "Northshire River", 24: "Northshire Abbey",
-                       34: "Echo Ridge Mine", 59: "Northshire Vineyards"}
-# Areas that exist only inside buildings (WMO), so they never show up on the terrain grid.
-INDOOR_AREAS = {24}
-EXPLORE_NAME_BLOCKLIST = ("UNUSED", "Not Used", "The Great Sea")
-
-
-def northshire_areas(areas: Dict[int, Area]) -> Set[int]:
-    for aid, name in NORTHSHIRE_SUBAREAS.items():
-        if areas[aid].name != name:
-            raise ValueError(f"Area {aid} is '{areas[aid].name}', expected '{name}'")
-    result = {NORTHSHIRE_AREA} | set(NORTHSHIRE_SUBAREAS)
-    result |= {a.id for a in areas.values() if a.parent == NORTHSHIRE_AREA}
-    return result
+EXPLORE_NAME_BLOCKLIST = ("UNUSED", "Not Used", "The Great Sea", "The North Sea", "The Veiled Sea")
 
 
 def areas_on_grid(maps_dir: str, map_id: int) -> Set[int]:
@@ -318,7 +338,7 @@ def spawn_regions(cur, grid: AreaGrid, regions: Regions, table: str, event_table
     for guid, entry, map_id, x, y, phase in rows:
         if guid in event_guids or not (phase & 1):
             continue
-        if map_id != MAP_ID:
+        if map_id != regions.map:
             out[entry].add(None)
             continue
         out[entry].add(regions.of_area(grid.area_at(map_id, x, y)))
@@ -348,8 +368,8 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
     event_quests |= {r[0] for r in query(cur, "SELECT quest FROM game_event_gameobject_quest")}
     event_quests |= {r[0] for r in query(cur, "SELECT questId FROM game_event_seasonal_questrelation")}
 
-    sort_ok = set(EXPLORE_ZONES) | {NORTHSHIRE_AREA} | {
-        a.id for a in areas.values() if a.zone in EXPLORE_ZONES}
+    chain_zones = {z for r in regions.chain.regions for z in r["zones"]}
+    sort_ok = chain_zones | regions.chain.valley | {a.id for a in areas.values() if a.zone in chain_zones}
 
     # A breadcrumb that is also a hard prerequisite (PrevQuestID) of a quest is mandatory.
     required = {abs(r[11]) for r in rows if r[11]}
@@ -466,10 +486,10 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
 
 def level_region(level: int) -> int:
     """First region whose level range reaches `level` (levels below the first count as region 0)."""
-    for i, r in enumerate(REGION_DEFS):
-        if level <= r["levels"][1]:
+    for i, (_first, last) in enumerate(LEVELS):
+        if level <= last:
             return i
-    return len(REGION_DEFS) - 1
+    return len(LEVELS) - 1
 
 
 def objective_regions(cur, grid: AreaGrid, regions: Regions, objectives: Dict[int, tuple],
@@ -539,7 +559,7 @@ def objective_regions(cur, grid: AreaGrid, regions: Regions, objectives: Dict[in
             t = triggers.get(trig)
             if t:
                 m, x, y = t
-                found.append({regions.of_area(grid.area_at(m, x, y)) if m == MAP_ID else None})
+                found.append({regions.of_area(grid.area_at(m, x, y)) if m == regions.map else None})
         result[qid] = found
     return result
 
@@ -659,10 +679,9 @@ def extract_rares(cur, grid: AreaGrid, regions: Regions):
     return result
 
 
-def extract_spells(cur, spells: Dict[int, Spell], quests: Dict[int, dict], grid: AreaGrid,
-                   regions: Regions) -> Dict[int, dict]:
+def extract_spells(cur, spells: Dict[int, Spell]) -> Dict[int, dict]:
     """Per class: trainer ids, spell pool (trainer spells up to MAX_LEVEL plus spells taught by
-    class quests), trainer NPC entries, and the earliest region with one of its trainers."""
+    class quests) and trainer NPC entries."""
     source = "trainer_spell"
     if table_exists(cur, TRAINER_BACKUP):
         source = f"(SELECT * FROM trainer_spell UNION SELECT * FROM {TRAINER_BACKUP})"
@@ -705,9 +724,18 @@ def extract_spells(cur, spells: Dict[int, Spell], quests: Dict[int, dict], grid:
         if trainers:
             npcs = {r[0] for r in query(cur, "SELECT CreatureId FROM creature_default_trainer "
                                              f"WHERE TrainerId IN ({','.join(map(str, trainers))})")}
-        at = spawn_regions(cur, grid, regions, "creature", "game_event_creature", npcs)
+        out[cls] = dict(trainers=trainers, pool=pool, npcs=npcs)
+    return out
+
+
+def trainer_regions(cur, grid: AreaGrid, regions: Regions, per_class: Dict[int, dict]) -> Dict[int, int]:
+    """class -> earliest region of the chain with one of its trainers (classes without one left out)."""
+    out = {}
+    for cls, c in per_class.items():
+        at = spawn_regions(cur, grid, regions, "creature", "game_event_creature", c["npcs"])
         region = best(set().union(*at.values()) if at else set())
-        out[cls] = dict(trainers=trainers, pool=pool, npcs=npcs, region=region)
+        if region is not None:
+            out[cls] = region
     return out
 
 
@@ -755,7 +783,8 @@ def spell_names(per_class: Dict[int, dict]) -> Dict[int, str]:
     return names
 
 
-def write_python(path: str, regions_out: list, quests_out: list, spell_names_: Dict[int, str],
+def write_python(path: str, chains_out: list, zone_keys: Dict[str, int], quests_out: list,
+                 spell_names_: Dict[int, str],
                  per_class: Dict[int, dict], gear_names: Dict[int, str], gear_by_quest: Dict[int, dict],
                  random_out: Dict[str, tuple], end_game_out: Dict[str, tuple]):
     def fmt(obj):
@@ -766,7 +795,7 @@ def write_python(path: str, regions_out: list, quests_out: list, spell_names_: D
     trainer_checks = {cls: {"Trainer: " + spell_names_[sid].removeprefix("Spell: "): (sid, sp["level"], sp["cost"])
                             for sid, sp in sorted(c["pool"].items(), key=lambda kv: (kv[1]["level"], kv[0]))
                             if sp["source"] == "trainer"}
-                      for cls, c in per_class.items() if c["region"] is not None}
+                      for cls, c in per_class.items()}
     lines = [
         '"""Generated by tools/extract_data.py from the AzerothCore world DB. Do not edit."""',
         "",
@@ -776,13 +805,15 @@ def write_python(path: str, regions_out: list, quests_out: list, spell_names_: D
         "RACES = " + fmt(RACES),
         "CLASSES = " + fmt(CLASSES),
         "",
-        "# name, key item, (first level, last level), explore, rares",
-        "REGIONS = " + fmt(regions_out),
+        "# Chains of zones, one per starting area: races that start there, regions",
+        "# (name, key item, (first level, last level), explore, rares), and per class the",
+        "# earliest region with one of its trainers",
+        "CHAINS = " + fmt(chains_out),
         "",
-        "ZONE_KEYS = " + fmt(ZONE_KEYS),
+        "ZONE_KEYS = " + fmt(zone_keys),
         "",
-        "# Quests: location name, quest id, region, race/class masks (0 = any), prerequisite quest,",
-        "# exclusive group (0 = none; only one member can ever be done)",
+        "# Quests: location name, quest id, region per chain, race/class masks (0 = any),",
+        "# prerequisite quest, exclusive group (0 = none; only one member can ever be done)",
         "QUESTS = " + fmt(quests_out),
         "",
         "# Spell items: item name -> spell id",
@@ -794,9 +825,6 @@ def write_python(path: str, regions_out: list, quests_out: list, spell_names_: D
         "# Class trainer checks (bought in place of a pooled spell):",
         "# class -> {location name: (spell id, level, copper)}",
         "TRAINER_CHECKS = " + fmt(trainer_checks),
-        "",
-        "# Earliest region with a trainer of each class (trainer checks need it too)",
-        "TRAINER_REGION = " + fmt({cls: c["region"] for cls, c in per_class.items() if c["region"] is not None}),
         "",
         "# Quest reward gear moved into the item pool: item name -> item entry",
         "GEAR_ITEMS = " + fmt({gear_names[e]: e for e in sorted(gear_names)}),
@@ -818,21 +846,22 @@ def write_python(path: str, regions_out: list, quests_out: list, spell_names_: D
         f.write("\n".join(lines))
 
 
-def fence_zones(areas: Dict[int, Area], free_areas: Set[int]) -> List[dict]:
-    """Every zone of our regions, with the Zone key it needs. Northshire is part of Elwynn's
-    zone, so it is Elwynn's free_areas."""
+def fence_zones(areas: Dict[int, Area], chain: Chain) -> List[dict]:
+    """Every zone of a chain, with the Zone key it needs. The valley lies in the chain's first
+    zone, so it is that zone's free_areas."""
     out = []
-    for r in REGION_DEFS:
+    for r in chain.regions:
         if not r["key"]:
             continue
         for zone in r["zones"]:
-            out.append(dict(zone=zone, name=areas[zone].name, key=ZONE_KEYS[r["key"]], key_name=r["key"],
-                            free=free_areas if zone == ELWYNN_ZONE else set()))
+            out.append(dict(zone=zone, name=areas[zone].name, key=r["zones"][0], key_name=r["key"],
+                            free=chain.valley if zone == chain.first_zone else set()))
     return out
 
 
-def write_lua(path: str, fence: List[dict], per_class: Dict[int, dict], spell_names_: Dict[int, str],
+def write_lua(path: str, fences: List[dict], per_class: Dict[int, dict], spell_names_: Dict[int, str],
               groups: Dict[int, List[int]]):
+    """fences: per chain {map, start: (map, x, y, z, o), zones: fence_zones(...)}"""
     def lua_set(ids):
         return "{ " + ", ".join(f"[{i}] = true" for i in sorted(ids)) + " }"
     def lua_str(t):
@@ -841,8 +870,6 @@ def write_lua(path: str, fence: List[dict], per_class: Dict[int, dict], spell_na
                         for cls, c in per_class.items())
     checks = []
     for cls, c in per_class.items():
-        if c["region"] is None:
-            continue
         rows = "\n".join(
             f"            {{ spell = {sid}, level = {sp['level']}, cost = {sp['cost']}, "
             f"name = {lua_str(spell_names_[sid].removeprefix('Spell: '))} }},"
@@ -852,22 +879,34 @@ def write_lua(path: str, fence: List[dict], per_class: Dict[int, dict], spell_na
     trainers = ", ".join(f"[{e}] = {cls}" for cls, c in per_class.items() for e in sorted(c["npcs"]))
     group_text = ", ".join(f"[{q}] = {{ {', '.join(map(str, members))} }}"
                            for members in groups.values() for q in members)
-    zones = "\n".join(
-        f"        [{z['zone']}] = {{ name = {lua_str(z['name'])}, key = {z['key']}, "
-        f"key_name = {lua_str(z['key_name'])}"
-        + (f", free_areas = {lua_set(z['free'])}" if z["free"] else "") + " },"
-        for z in fence)
+    chain_text = []
+    for i, f in enumerate(fences):
+        zones = "\n".join(
+            f"                [{z['zone']}] = {{ name = {lua_str(z['name'])}, key = {z['key']}, "
+            f"key_name = {lua_str(z['key_name'])}"
+            + (f", free_areas = {lua_set(z['free'])}" if z["free"] else "") + " },"
+            for z in f["zones"])
+        m, x, y, z_, o = f["start"]
+        chain_text.append(
+            f"        [{i + 1}] = {{  -- {f['name']}\n"
+            f"            map = {f['map']},\n"
+            f"            start = {{ map = {m}, x = {x:.2f}, y = {y:.2f}, z = {z_:.2f}, o = {o:.2f} }},\n"
+            f"            zone_locks = {{\n{zones}\n            }},\n"
+            f"        }},")
+    race_chain = ", ".join(f"[{r}] = {i + 1}" for i, f in enumerate(fences) for r in f["races"])
     nl = "\n"
     text = f"""-- Generated by tools/extract_data.py from the AzerothCore world DB. Do not edit.
 -- Read lazily by archipelago.lua (script load order does not matter).
 ArchipelagoData = {{
-    -- The randomizer's world: only these zones of map {MAP_ID}. Each needs the Zone key `key`
-    -- (an AreaTable zone id); free_areas are always allowed (the start area). Anything else
-    -- (other zones, other maps, dungeons) is outside the randomizer and fenced off.
-    fence_map = {MAP_ID},
-    zone_locks = {{
-{zones}
+    -- One chain of zones per starting area; a player plays the chain of their race. Only the
+    -- chain's zones of its map are in the randomizer, each needing the Zone key `key` (an
+    -- AreaTable zone id); free_areas are always allowed (the starting valley). Anything else
+    -- (other zones, other maps, dungeons) is fenced off; `start` is where fenced players go
+    -- when they have no allowed position yet.
+    chains = {{
+{nl.join(chain_text)}
     }},
+    race_chain = {{ {race_chain} }},
     -- Per class: spells that are Archipelago items, unlearned unless received from the multiworld.
     locked_spells = {{
 {locked}
@@ -938,50 +977,84 @@ def main(argv=None):
     spells = load_spells(os.path.join(args.data, "dbc"))
     triggers = load_area_triggers(os.path.join(args.data, "dbc"))
     grid = AreaGrid(os.path.join(args.data, "maps"))
-    northshire = northshire_areas(areas)
-    regions = Regions(areas, northshire)
+    chains = [Chain(i, d, areas) for i, d in enumerate(CHAIN_DEFS)]
+    assert sorted(r for c in chains for r in c.races) == sorted(RACES), "every race needs one chain"
 
-    # Sanity: the human start position must be in Northshire.
-    start_area = grid.area_at(0, -8949.95, -132.49)
-    if regions.of_area(start_area) != 0:
-        sys.exit(f"Self-check failed: human start position is area {start_area}, not Northshire")
     if spells[100].name != "Charge":
         sys.exit("Self-check failed: Spell.dbc layout (spell 100 is not Charge)")
 
     conn = pymysql.connect(host=args.host, port=args.port, user=args.user, password=args.password,
                            database=args.world_db, ssl={"check_hostname": False})
     with conn.cursor() as cur:
-        quests, groups = extract_quests(cur, grid, regions, areas, triggers)
-        rares = extract_rares(cur, grid, regions)
-        per_class = extract_spells(cur, spells, quests, grid, regions)
+        # Each race's start position (from playercreateinfo) must be in its chain's valley.
+        starts = {}
+        for race, m, x, y, z, o in query(cur, "SELECT race, map, position_x, position_y, position_z, orientation "
+                                              "FROM playercreateinfo WHERE class <> 6 ORDER BY race, class"):
+            if race not in RACES or any(race in c.races and c.index in starts for c in chains):
+                continue
+            chain = next(c for c in chains if race in c.races)
+            area = grid.area_at(m, x, y)
+            if m != chain.map or area not in chain.valley:
+                sys.exit(f"Self-check failed: {RACES[race]} starts in area {area} (map {m}), "
+                         f"not in {chain.name}")
+            starts.setdefault(chain.index, (m, x, y, z, o))
+
+        per_class = extract_spells(cur, spells)
+        quests: Dict[int, dict] = {}            # quest id -> quest (+ "regions": chain -> region)
+        per_chain = []
+        grid_areas: Dict[int, Set[int]] = {}
+        for chain in chains:
+            regions = Regions(areas, chain)
+            cq, _groups = extract_quests(cur, grid, regions, areas, triggers)
+            for qid, q in cq.items():
+                quests.setdefault(qid, dict(q, regions={}))["regions"][chain.index] = q["region"]
+            if chain.map not in grid_areas:
+                grid_areas[chain.map] = areas_on_grid(os.path.join(args.data, "maps"), chain.map)
+            on_grid = grid_areas[chain.map] | chain.valley
+            explore_zones = {z for r in chain.regions for z in r["explore"]}
+            explore = [dict(id=a.id, name=a.name, region=regions.of_area(a.id))
+                       for a in areas.values()
+                       if a.map == chain.map and a.explore_flag and a.id in on_grid
+                       and (a.zone in explore_zones or a.id in chain.valley)
+                       and not any(b in a.name for b in EXPLORE_NAME_BLOCKLIST)]
+            per_chain.append(dict(rares=extract_rares(cur, grid, regions), explore=explore,
+                                  trainer_region=trainer_regions(cur, grid, regions, per_class)))
         gear_by_quest, strip = extract_rewards(cur, quests)
         gear_items = {i["id"]: i for g in gear_by_quest.values() for i in g["fixed"] + g["choice"]}
         random_items, end_game = extract_random_items(cur, set(gear_items))
     conn.close()
 
+    # Exclusive groups across all chains: members that can be locations somewhere.
+    members = defaultdict(list)
+    for qid, q in quests.items():
+        if q["excl"] > 0:
+            members[q["excl"]].append(qid)
+    groups = {g: sorted(m) for g, m in members.items() if len(m) > 1}
+
     gear_names = {it["id"]: f"Item: {n}" for n, it in unique_names(
         sorted(gear_items.values(), key=lambda i: i["id"]), lambda i: i["name"]).items()}
 
-    on_grid = areas_on_grid(os.path.join(args.data, "maps"), MAP_ID) | INDOOR_AREAS
-    explore = [dict(id=a.id, name=a.name, region=regions.of_area(a.id))
-               for a in areas.values()
-               if a.map == MAP_ID and a.explore_flag and a.id in on_grid
-               and (a.zone in EXPLORE_ZONES or a.id in northshire)
-               and not any(b in a.name for b in EXPLORE_NAME_BLOCKLIST)]
-
-    # Names must be unique across all regions (they become AP location names).
+    # Names must be unique across all chains (they become AP location names).
     all_q = unique_names(sorted(quests.values(), key=lambda q: q["id"]), lambda q: q["title"])
-    all_e = unique_names(sorted(explore, key=lambda a: a["id"]), lambda a: a["name"])
-    all_r = unique_names(sorted(rares.values(), key=lambda c: c["id"]), lambda c: c["name"])
-    regions_out = []
-    for i, r in enumerate(REGION_DEFS):
-        regions_out.append({
-            "name": r["name"], "key": r["key"], "levels": r["levels"],
-            "explore": {n: a["id"] for n, a in all_e.items() if a["region"] == i},
-            "rares": {n: c["id"] for n, c in all_r.items() if c["region"] == i},
-        })
-    quests_out = [dict(name=n, id=q["id"], region=q["region"], races=q["races"], classes=q["classes"],
-                       prev=abs(q["prev"]), group=q["group"]) for n, q in all_q.items()]
+    explore_all = {a["id"]: a for c in per_chain for a in c["explore"]}
+    rares_all = {r["id"]: r for c in per_chain for r in c["rares"].values()}
+    explore_name = {a["id"]: n for n, a in unique_names(sorted(explore_all.values(), key=lambda a: a["id"]),
+                                                       lambda a: a["name"]).items()}
+    rare_name = {r["id"]: n for n, r in unique_names(sorted(rares_all.values(), key=lambda r: r["id"]),
+                                                     lambda r: r["name"]).items()}
+    chains_out = []
+    for chain, c in zip(chains, per_chain):
+        chains_out.append(dict(
+            name=chain.name, races=chain.races,
+            regions=[dict(name=r["name"], key=r["key"], levels=r["levels"],
+                          explore={explore_name[a["id"]]: a["id"] for a in c["explore"] if a["region"] == i},
+                          rares={rare_name[e]: e for e, mob in c["rares"].items() if mob["region"] == i})
+                     for i, r in enumerate(chain.regions)],
+            trainer_region=c["trainer_region"]))
+    zone_keys = {k: z for chain in chains for k, z in chain.zone_keys().items()}
+    quests_out = [dict(name=n, id=q["id"], regions=q["regions"], races=q["races"], classes=q["classes"],
+                       prev=abs(q["prev"]), group=q["excl"] if q["excl"] in groups else 0)
+                  for n, q in all_q.items()]
 
     names = spell_names(per_class)
     taken = set(gear_names.values())
@@ -995,19 +1068,23 @@ def main(argv=None):
         name = f"Item: {n}"
         end_game_out[name if name not in taken else f"{name} ({it['id']})"] = (it["id"], it["slot"])
 
-    write_python(os.path.join(ROOT, "apworld", "wow", "gen_data.py"), regions_out, quests_out, names,
+    write_python(os.path.join(ROOT, "apworld", "wow", "gen_data.py"), chains_out, zone_keys, quests_out, names,
                  per_class, gear_names, gear_by_quest, random_out, end_game_out)
     write_reward_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_quest_rewards.sql"), strip)
     write_lua(os.path.join(ROOT, "server", "lua_scripts", "archipelago_data.lua"),
-              fence_zones(areas, northshire), per_class, names, groups)
+              [dict(name=chain.name, races=chain.races, map=chain.map, start=starts[chain.index],
+                    zones=fence_zones(areas, chain)) for chain in chains], per_class, names, groups)
     os.makedirs(os.path.join(ROOT, "server", "sql", "world"), exist_ok=True)
     write_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_trainers.sql"), per_class)
 
-    print(f"Northshire areas: {sorted(northshire)}  (start position area {start_area})")
     print(f"Either/or quest groups: {len(groups)}")
-    for i, r in enumerate(regions_out):
-        n = sum(1 for q in quests_out if q["region"] == i)
-        print(f"{r['name']:18} quests {n:3} (all races/classes)  explore {len(r['explore']):2}  rares {len(r['rares']):2}")
+    for ci, (chain, c) in enumerate(zip(chains_out, per_chain)):
+        counts = [sum(1 for q in quests_out if q["regions"].get(ci) == i) for i in range(len(chain["regions"]))]
+        print(f"{chain['name']:17} " + "  ".join(
+            f"{r['name']}: {n} quests, {len(r['explore'])} explore, {len(r['rares'])} rares"
+            for r, n in zip(chain["regions"], counts)))
+        print(f"{'':17} trainers: " + ", ".join(
+            f"{CLASSES[cls]} {chain['regions'][r]['name']}" for cls, r in sorted(c["trainer_region"].items())))
     print(f"Gear: {len(gear_names)} items from {len(strip)} quests")
     print(f"Random filler items: {len(random_out)}  "
           + ", ".join(f"{c} {n}" for c, n in sorted(Counter(c for _, c in random_out.values()).items())))
@@ -1015,9 +1092,7 @@ def main(argv=None):
           + ", ".join(f"{s} {n}" for s, n in sorted(Counter(s for _, s in end_game_out.values()).items())))
     for cls, c in per_class.items():
         n_tr = sum(1 for sp in c["pool"].values() if sp["source"] == "trainer")
-        where = REGION_DEFS[c["region"]]["name"] if c["region"] is not None else "none in our zones"
-        print(f"{CLASSES[cls]:8} spells {len(c['pool']):2}  trainer checks {n_tr:2}  "
-              f"trainers {len(c['npcs']):2} (first in {where})")
+        print(f"{CLASSES[cls]:8} spells {len(c['pool']):2}  trainer checks {n_tr:2}  trainers {len(c['npcs']):2}")
 
 
 if __name__ == "__main__":

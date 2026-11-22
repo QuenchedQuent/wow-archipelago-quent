@@ -2,7 +2,7 @@ from typing import Dict, List, Tuple
 
 from BaseClasses import Location
 
-from .data import (QUESTS, REGIONS, TRAINER_CHECKS, LocKind, RegionData, level_location_name, loc_id,
+from .data import (CHAINS, QUESTS, RACE_CHAIN, TRAINER_CHECKS, LocKind, RegionData, level_location_name, loc_id,
                    location_name, slot_quests, trainer_locations)
 
 
@@ -24,12 +24,12 @@ def region_locations(region: RegionData, include_explore: bool, include_rares: b
 
 def slot_locations(race: int, cls: int, include_explore: bool, include_rares: bool,
                    include_trainer: bool) -> List[List[Tuple[str, int]]]:
-    """Per region, the (name, id) locations of a character, honoring the options."""
-    out = [region_locations(r, include_explore, include_rares) for r in REGIONS]
+    """Per region of the race's chain, the (name, id) locations of a character, honoring the options."""
+    out = [region_locations(r, include_explore, include_rares) for r in CHAINS[RACE_CHAIN[race]].regions]
     for q, region in slot_quests(race, cls):
         out[region].append((location_name(LocKind.QUEST, q.name), loc_id(LocKind.QUEST, q.id)))
     if include_trainer:
-        for name, spell, _level, region in trainer_locations(cls):
+        for name, spell, _level, region in trainer_locations(race, cls):
             out[region].append((name, loc_id(LocKind.TRAINER, spell)))
     return out
 
@@ -43,9 +43,10 @@ def _add(name: str, lid: int) -> None:
     LOCATION_TABLE[name] = lid
 
 
-for _r in REGIONS:
-    for _n, _i in region_locations(_r, True, True):
-        _add(_n, _i)
+for _c in CHAINS:
+    for _r in _c.regions:
+        for _n, _i in region_locations(_r, True, True):
+            _add(_n, _i)
 for _q in QUESTS:
     _add(location_name(LocKind.QUEST, _q.name), loc_id(LocKind.QUEST, _q.id))
 for _checks in TRAINER_CHECKS.values():

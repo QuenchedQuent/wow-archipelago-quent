@@ -4,14 +4,19 @@ from Options import Choice, DefaultOnToggle, PerGameCommonOptions, Range
 
 
 class CharacterRace(Choice):
-    """The race of the character you will play. Any Alliance race: Northshire is the human
-    start, and other races are brought there on their first login. Decides which quests
-    are checks (some are race-specific)."""
+    """The race of the character you will play. You play the zones around your race's
+    starting area for levels 1-20, e.g. Northshire, Elwynn Forest and Westfall for humans,
+    or Valley of Trials, Durotar and The Barrens for orcs and trolls."""
     display_name = "Character Race"
     option_human = 1
+    option_orc = 2
     option_dwarf = 3
     option_night_elf = 4
+    option_undead = 5
+    option_tauren = 6
     option_gnome = 7
+    option_troll = 8
+    option_blood_elf = 10
     option_draenei = 11
     default = 1
 
@@ -74,7 +79,7 @@ class EndGameGear(DefaultOnToggle):
 
 
 class ZoneKeyPlacement(Choice):
-    """Where the Zone keys (Elwynn Forest, Westfall) are. They are always progression.
+    """Where your two Zone keys (e.g. Elwynn Forest and Westfall) are. They are always progression.
     Anywhere: shuffled into the multiworld like any other item (any player's game).
     Start With: you start with every Zone key."""
     display_name = "Zone Key Placement"
