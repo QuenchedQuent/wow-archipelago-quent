@@ -82,7 +82,10 @@ class WoWContext(CommonContext):
         await self.send_connect()
 
     def on_package(self, cmd: str, args: dict):
-        if cmd == "Connected":
+        if cmd == "RoomInfo":
+            # CommonClient doesn't keep it; we need it to tell games apart.
+            self.seed_name = args.get("seed_name") or None
+        elif cmd == "Connected":
             self.slot_data = args.get("slot_data") or {}
             self.char_guid = None  # re-resolve for this slot/seed
             self.need_full_sync = True
@@ -108,6 +111,10 @@ class WoWContext(CommonContext):
         if linked is not None:
             return linked
 
+        if not seed:
+            self.hint("Waiting for the server's seed name...")
+            return None
+
         if self.character_name:
             guid = await asyncio.to_thread(db.character_guid, self.character_name)
             if guid is None:
@@ -118,17 +125,23 @@ class WoWContext(CommonContext):
                 self.hint(f"{self.character_name} is already linked to another seed. "
                           f"Use a fresh character (/character <name>, or /character to auto-detect).")
                 return None
-            return guid
+            return await self.new_link(guid)
 
         candidates = await asyncio.to_thread(db.unlinked_online_characters)
         if len(candidates) == 1:
-            return candidates[0][0]
+            return await self.new_link(candidates[0][0])
         if not candidates:
             self.hint("Waiting for you to log in to WoW with a fresh character...")
         else:
             names = ", ".join(n for _, n in candidates)
             self.hint(f"Several fresh characters are online ({names}). Pick one with /character <name>.")
         return None
+
+    async def new_link(self, guid: int) -> int:
+        """Link a character to this seed, dropping rows left over from an earlier game
+        (a deleted character's reused guid, or links made before seeds were recorded)."""
+        await asyncio.to_thread(self.db.reset_character, guid)
+        return guid
 
     # --- sync -----------------------------------------------------------------------
 

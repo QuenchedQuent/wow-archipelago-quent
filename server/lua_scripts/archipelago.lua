@@ -51,6 +51,8 @@ end
 AP.RETURN_POINT = { map = 0, x = -8949.95, y = -132.49, z = 83.53, o = 0.0 }
 
 -- Eluna hook ids
+local PLAYER_EVENT_ON_CHARACTER_CREATE = 1
+local PLAYER_EVENT_ON_CHARACTER_DELETE = 2
 local PLAYER_EVENT_ON_LOGIN          = 3
 local PLAYER_EVENT_ON_LOGOUT         = 4
 local PLAYER_EVENT_ON_KILL_CREATURE  = 7
@@ -261,9 +263,10 @@ local function refreshFromDB(player, st, pushChanges)
     end
 
     local s = CharDBQuery(string.format(
-        "SELECT connected, slot_name, checked_count, total_count, goal_level FROM ap_state WHERE char_guid = %d",
+        "SELECT connected, slot_name, checked_count, total_count, goal_level, seed_name FROM ap_state WHERE char_guid = %d",
         st.guid))
     local status
+    if st.seed == nil then st.seed = s and s:GetString(5) or "" end   -- seed this state was built for
     if s then
         st.goalLevel = s:GetUInt32(4)
         status = table.concat({ s:GetUInt32(0), s:GetString(1), s:GetUInt32(2), s:GetUInt32(3), st.goalLevel }, "\t")
@@ -309,11 +312,23 @@ local function initPlayer(player)
     sweepQuests(player, st)
 end
 
+-- The client relinked this character to another seed (and cleared its old rows):
+-- start over so nothing from the old game (zones, spells, sent checks) carries over.
+local function relinked(player, st)
+    local s = CharDBQuery(string.format("SELECT seed_name FROM ap_state WHERE char_guid = %d", st.guid))
+    return (s and s:GetString(0) or "") ~= st.seed
+end
+
 local function tickPlayer(player)
     local st = getState(player)
     if not st then
         initPlayer(player)
         st = getState(player)
+    elseif st.ticks % AP.SWEEP_TICKS == AP.SWEEP_TICKS - 1 and relinked(player, st) then
+        say(player, "Linked to a new Archipelago game.")
+        initPlayer(player)
+        st = getState(player)
+        fullSyncToAddon(player, st)
     end
     st.ticks = st.ticks + 1
     processInbox(player, st)
@@ -340,6 +355,22 @@ CreateLuaEvent(function()
         if not ok then print("[Archipelago] tick error: " .. tostring(err)) end
     end
 end, AP.TICK_MS, 0)
+
+-- AzerothCore hands a deleted character's guid to the next new character, so drop any
+-- Archipelago rows stored under it.
+local function forgetCharacter(guid)
+    for _, t in ipairs({ "ap_item_inbox", "ap_location_outbox", "ap_locations", "ap_location_contents", "ap_state" }) do
+        CharDBExecute(string.format("DELETE FROM %s WHERE char_guid = %d", t, guid))
+    end
+end
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_CHARACTER_CREATE, function(_, player)
+    forgetCharacter(player:GetGUIDLow())
+end)
+
+RegisterPlayerEvent(PLAYER_EVENT_ON_CHARACTER_DELETE, function(_, guid)
+    forgetCharacter(guid)
+end)
 
 RegisterPlayerEvent(PLAYER_EVENT_ON_LOGIN, function(_, player)
     initPlayer(player)

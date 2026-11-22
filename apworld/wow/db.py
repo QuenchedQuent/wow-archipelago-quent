@@ -69,6 +69,13 @@ class BridgeDB:
         rows = self._all("SELECT seed_name FROM ap_state WHERE char_guid = %s", (guid,))
         return rows[0][0] if rows else ""
 
+    def reset_character(self, guid: int) -> None:
+        """Forget everything stored for a character before linking it to a new seed.
+        AzerothCore reuses the guid of a deleted character, so old rows can belong to
+        a different character from an earlier game."""
+        for table in ("ap_item_inbox", "ap_location_outbox", "ap_locations", "ap_location_contents", "ap_state"):
+            self._exec(f"DELETE FROM {table} WHERE char_guid = %s", (guid,))
+
     # --- state ----------------------------------------------------------------------
 
     def write_state(self, guid: int, seed: str, slot: str, connected: bool,
