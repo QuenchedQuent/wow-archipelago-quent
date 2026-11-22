@@ -27,6 +27,16 @@ class IncludeTrainerChecks(DefaultOnToggle):
     display_name = "Include Trainer Checks"
 
 
+class RandomItemFiller(Range):
+    """Percent of filler that is a random item from anywhere in the game (anything you could
+    loot, buy or get from a quest, with no level requirement; gear only up to item level 25).
+    The rest is potions, bandages and money."""
+    display_name = "Random Item Filler"
+    range_start = 0
+    range_end = 100
+    default = 50
+
+
 class ZoneKeyPlacement(Choice):
     """Where the Zone keys (Elwynn Forest, Westfall) are. They are always progression.
     Anywhere: shuffled into the multiworld like any other item (any player's game).
@@ -44,3 +54,4 @@ class WoWOptions(PerGameCommonOptions):
     include_rares: IncludeRares
     include_trainer_checks: IncludeTrainerChecks
     zone_key_placement: ZoneKeyPlacement
+    random_item_filler: RandomItemFiller

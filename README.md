@@ -75,6 +75,16 @@ characters created earlier, unless the player received that spell from the multi
 - **Grindy checks hold only filler:** rares (long respawns), and the last 2 levels of each
   region (Reach Level and trainer checks), so no one's progression waits on them.
 
+## Filler
+Filler is potions, bandages and money (`FILLER_ITEMS` in `data.py`) mixed with random items from
+anywhere in the game. `random_item_filler` (0-100, default 50) is the percent that is random.
+The extractor's random pool is every item you can loot, buy or get from a quest with no level
+requirement, minus grey junk, unique, temporary, holiday, quest, key and currency items, and
+items your race or class can't use. Weapons and armor are capped at item level 25, because the
+data has end-game gear with no level requirement. A random pick chooses a category first
+(gear 30, consumables 25, trade goods 20, other 15, recipes 10; `RANDOM_CATEGORY_WEIGHTS`), then
+an item, since recipes are about half the pool.
+
 ## Trainer checks
 Each trainer spell in the pool (25 for a Warrior, levels 1 to 20) becomes a `Trainer: <spell>`
 location. Every class trainer sells them, each at the spell's usual level and price. The addon

@@ -94,6 +94,26 @@ FILLER_ITEMS: Dict[str, int] = {
 }
 
 
+# Random filler items: any obtainable item without a level requirement (gear capped at a low
+# item level by the extractor). name -> item entry, minus anything already an item above.
+_taken_entries = {entry for entry, _ in GEAR.values()} | {
+    i - item_id(ItemKind.GAME_ITEM, 0) for i in FILLER_ITEMS.values()
+    if ITEM_BASE + ItemKind.GAME_ITEM * KIND_SIZE <= i < ITEM_BASE + (ItemKind.GAME_ITEM + 1) * KIND_SIZE}
+RANDOM_ITEMS: Dict[str, int] = {}
+RANDOM_ITEMS_BY_CATEGORY: Dict[str, List[str]] = {}
+for _name, (_entry, _category) in gen_data.RANDOM_ITEMS.items():
+    if _entry in _taken_entries or _name in FILLER_ITEMS or _name in GEAR:
+        continue
+    RANDOM_ITEMS[_name] = _entry
+    RANDOM_ITEMS_BY_CATEGORY.setdefault(_category, []).append(_name)
+
+# How a random filler item is picked: a category by weight, then an item in it. Recipes are
+# about half the pool, so a plain uniform pick would mostly hand out end-game recipes.
+RANDOM_CATEGORY_WEIGHTS: Dict[str, int] = {
+    "gear": 30, "consumable": 25, "trade goods": 20, "other": 15, "recipe": 10,
+}
+
+
 def location_name(kind: int, name: str) -> str:
     prefix = {
         LocKind.QUEST: "Quest",

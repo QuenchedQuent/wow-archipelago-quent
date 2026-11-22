@@ -5,7 +5,8 @@ from BaseClasses import ItemClassification, LocationProgressType, Region, Tutori
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, Type, components, launch_subprocess
 
-from .data import FILLER_ITEMS, GAME, GEAR, REGIONS, SPELLS, ZONE_KEYS, is_grindy_level, level_location_name
+from .data import (FILLER_ITEMS, GAME, GEAR, RANDOM_CATEGORY_WEIGHTS, RANDOM_ITEMS_BY_CATEGORY, REGIONS,
+                   SPELLS, ZONE_KEYS, is_grindy_level, level_location_name)
 from .items import ITEM_CLASSIFICATION, ITEM_GROUPS, ITEM_TABLE, WoWItem
 from .locations import LOCATION_TABLE, WoWLocation, region_locations
 from .options import WoWOptions, ZoneKeyPlacement
@@ -82,6 +83,11 @@ class WoWWorld(World):
         return WoWItem(name, ITEM_CLASSIFICATION[name], self.item_name_to_id[name], self.player)
 
     def get_filler_item_name(self) -> str:
+        if self.random.randrange(100) < self.options.random_item_filler.value:
+            categories = [c for c in RANDOM_CATEGORY_WEIGHTS if RANDOM_ITEMS_BY_CATEGORY.get(c)]
+            if categories:
+                category = self.random.choices(categories, [RANDOM_CATEGORY_WEIGHTS[c] for c in categories])[0]
+                return self.random.choice(RANDOM_ITEMS_BY_CATEGORY[category])
         return self.random.choice(list(FILLER_ITEMS))
 
     def create_regions(self) -> None:

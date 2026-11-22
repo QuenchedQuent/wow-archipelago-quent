@@ -14,6 +14,9 @@ in the trainer window under "Archipelago", along with what each one holds.
 Only Northshire, Elwynn Forest, Stormwind City and Westfall are part of the game; walking
 anywhere else sends you back. Rares and the last levels of each zone only hold filler.
 
+Filler is a mix of potions, bandages, money and random items from anywhere in the
+game that have no level requirement (the `random_item_filler` option sets the mix).
+
 ## What is the goal?
 
 Reach the configured goal level.
