@@ -9,7 +9,8 @@ class WoWLocation(Location):
     game = "World of Warcraft"
 
 
-def region_locations(region: RegionData, include_explore: bool, include_rares: bool) -> List[Tuple[str, int]]:
+def region_locations(region: RegionData, include_explore: bool, include_rares: bool,
+                     include_trainer: bool) -> List[Tuple[str, int]]:
     """(name, id) pairs for the locations in a region, honoring the options."""
     out: List[Tuple[str, int]] = []
     for title, qid in region.quests.items():
@@ -22,14 +23,17 @@ def region_locations(region: RegionData, include_explore: bool, include_rares: b
     if include_rares:
         for mob, entry in region.rares.items():
             out.append((location_name(LocKind.RARE, mob), loc_id(LocKind.RARE, entry)))
+    if include_trainer:
+        for name, spell in region.trainer.items():
+            out.append((name, loc_id(LocKind.TRAINER, spell)))
     return out
 
 
 # Full table (all options on) for the datapackage.
 LOCATION_TABLE: Dict[str, int] = {
-    name: lid for region in REGIONS for name, lid in region_locations(region, True, True)
+    name: lid for region in REGIONS for name, lid in region_locations(region, True, True, True)
 }
 
 assert len(set(LOCATION_TABLE.values())) == len(LOCATION_TABLE), "duplicate location id"
-assert len(LOCATION_TABLE) == sum(len(region_locations(r, True, True)) for r in REGIONS), \
+assert len(LOCATION_TABLE) == sum(len(region_locations(r, True, True, True)) for r in REGIONS), \
     "duplicate location name"

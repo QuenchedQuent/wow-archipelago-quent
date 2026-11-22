@@ -25,7 +25,7 @@ class LocKind:
     LEVEL = 2      # character level
     RARE = 3       # creature_template entry
     VENDOR = 4     # (later)
-    TRAINER = 5    # (later)
+    TRAINER = 5    # spell id the check is sold in place of
 
 
 class ItemKind:
@@ -51,6 +51,7 @@ class RegionData(NamedTuple):
     quests: Dict[str, int]           # quest title -> quest id
     explore: Dict[str, int]          # subzone name -> area id
     rares: Dict[str, int]            # creature name -> entry
+    trainer: Dict[str, int]          # "Trainer: <spell>" -> spell id, bought at a class trainer
 
 
 # Linear chain for the MVP; each region connects to the previous one.
@@ -62,9 +63,14 @@ REGIONS: List[RegionData] = [
         quests=r["quests"],
         explore=r["explore"],
         rares=r["rares"],
+        # A trainer check needs the spell's level: it goes in the region that owns that level.
+        trainer={name: spell for name, (spell, level, _cost) in gen_data.TRAINER_CHECKS.items()
+                 if r["levels"][0] <= max(level, gen_data.REGIONS[0]["levels"][0]) <= r["levels"][1]},
     )
     for r in gen_data.REGIONS
 ]
+assert sum(len(r.trainer) for r in REGIONS) == len(gen_data.TRAINER_CHECKS), "trainer check outside regions"
+
 
 MAX_LEVEL: int = gen_data.MAX_LEVEL
 

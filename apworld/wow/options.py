@@ -21,8 +21,15 @@ class IncludeRares(DefaultOnToggle):
     display_name = "Include Rares"
 
 
+class IncludeTrainerChecks(DefaultOnToggle):
+    """Class trainers sell Archipelago checks in place of the spells that are now items.
+    Each costs what the spell would have, and needs the spell's level."""
+    display_name = "Include Trainer Checks"
+
+
 @dataclass
 class WoWOptions(PerGameCommonOptions):
     goal_level: GoalLevel
     include_exploration: IncludeExploration
     include_rares: IncludeRares
+    include_trainer_checks: IncludeTrainerChecks

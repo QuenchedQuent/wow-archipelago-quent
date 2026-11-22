@@ -64,7 +64,7 @@ class WoWWeb(WebWorld):
 class WoWWorld(World):
     """
     World of Warcraft on a 3.3.5 AzerothCore private server. Quests, levels,
-    exploration and rare kills are checks; spells and zone access are items.
+    exploration, rare kills and class trainer purchases are checks; spells and zone access are items.
     """
     game = GAME
     web = WoWWeb()
@@ -94,7 +94,8 @@ class WoWWorld(World):
         for rdata in REGIONS:
             region = Region(rdata.name, self.player, self.multiworld)
             locs = region_locations(rdata, bool(self.options.include_exploration),
-                                    bool(self.options.include_rares))
+                                    bool(self.options.include_rares),
+                                    bool(self.options.include_trainer_checks))
             region.add_locations(dict(locs), WoWLocation)
             self.multiworld.regions.append(region)
 

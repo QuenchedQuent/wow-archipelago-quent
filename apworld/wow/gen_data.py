@@ -175,6 +175,33 @@ SPELLS = {'Spell: Battle Shout (Rank 1)': (6673, 1),
  'Spell: Stance Mastery': (12678, 20),
  'Spell: Retaliation': (20230, 20)}
 
+# Class trainer checks (bought in place of a pooled spell): location name -> (spell id, level, copper)
+TRAINER_CHECKS = {'Trainer: Battle Shout (Rank 1)': (6673, 1, 10),
+ 'Trainer: Charge': (100, 4, 100),
+ 'Trainer: Rend (Rank 1)': (772, 4, 100),
+ 'Trainer: Parry': (3127, 6, 100),
+ 'Trainer: Thunder Clap (Rank 1)': (6343, 6, 100),
+ 'Trainer: Victory Rush': (34428, 6, 100),
+ 'Trainer: Heroic Strike (Rank 2)': (284, 8, 200),
+ 'Trainer: Hamstring': (1715, 8, 200),
+ 'Trainer: Bloodrage': (2687, 10, 600),
+ 'Trainer: Rend (Rank 2)': (6546, 10, 600),
+ 'Trainer: Shield Bash': (72, 12, 1000),
+ 'Trainer: Battle Shout (Rank 2)': (5242, 12, 1000),
+ 'Trainer: Overpower': (7384, 12, 1000),
+ 'Trainer: Demoralizing Shout': (1160, 14, 1500),
+ 'Trainer: Revenge': (6572, 14, 1500),
+ 'Trainer: Heroic Strike (Rank 3)': (285, 16, 2000),
+ 'Trainer: Mocking Blow': (694, 16, 2000),
+ 'Trainer: Shield Block': (2565, 16, 2000),
+ 'Trainer: Disarm': (676, 18, 3000),
+ 'Trainer: Thunder Clap (Rank 2)': (8198, 18, 3000),
+ 'Trainer: Dual Wield': (674, 20, 4000),
+ 'Trainer: Cleave': (845, 20, 4000),
+ 'Trainer: Rend (Rank 3)': (6547, 20, 4000),
+ 'Trainer: Stance Mastery': (12678, 20, 4000),
+ 'Trainer: Retaliation': (20230, 20, 4000)}
+
 # Quest reward gear moved into the item pool: item name -> (item entry, copies, required level)
 GEAR = {'Item: Red Linen Sash': (983, 1, 0),
  "Item: Belt of the People's Militia": (1154, 1, 0),

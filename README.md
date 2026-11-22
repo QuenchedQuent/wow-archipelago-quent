@@ -38,7 +38,7 @@ The kinds are defined in [apworld/wow/data.py](apworld/wow/data.py) and [archipe
 Quests, exploration, rares, the zone fence and the spell pool are generated from a real
 AzerothCore world DB by [tools/extract_data.py](tools/extract_data.py). Don't hand-edit the outputs:
 - `apworld/wow/gen_data.py`: regions, quests, exploration, rares and spell items for the APWorld
-- `server/lua_scripts/archipelago_data.lua`: zone fence and locked spells for the server script
+- `server/lua_scripts/archipelago_data.lua`: zone fence, locked spells and trainer checks for the server script
 - `server/sql/world/archipelago_trainers.sql`: removes pooled spells from class trainers
 - `server/sql/world/archipelago_quest_rewards.sql`: removes gear rewards from quest locations
 
@@ -58,6 +58,14 @@ Every spell in the pool is an Archipelago item. Trainers don't teach them (see t
 the server script unlearns any that arrive some other way, such as class quest rewards or
 characters created earlier, unless the player received that spell from the multiworld.
 
+## Trainer checks
+Each trainer spell in the pool (25 for a Warrior, levels 1 to 20) becomes a `Trainer: <spell>`
+location. Every class trainer sells them, each at the spell's usual level and price. For linked
+characters of our class, the server script replaces the trainer's menu with: quests, the normal
+training window, "Archipelago checks" (what each check holds, shown before you buy) and talent
+reset. Other characters get the normal menu. In logic, a check sits in the region that owns its
+level. Turn the checks off with the `include_trainer_checks` option.
+
 ## Quest rewards
 A quest that is a location gives its normal XP, money and reputation, but its gear is replaced by
 the Archipelago check. That gear (for "choose one" rewards, the best pick for a warrior) is added
@@ -66,4 +74,4 @@ and items other quests need, are left alone. The client scouts every location, a
 shows what each quest holds next to the quest window and the quest log.
 
 ## Next (see plan)
-Vendor/trainer checks, equip and flight-path items, and more classes and zones.
+Vendor checks, equip and flight-path items, and more classes and zones.

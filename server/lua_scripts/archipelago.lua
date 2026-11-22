@@ -1,7 +1,7 @@
 --[[
   Archipelago integration for AzerothCore + Eluna.
 
-  - Detects checks (quest completion, level, exploration, rare kills) and writes them
+  - Detects checks (quest completion, level, exploration, rare kills, trainer purchases) and writes them
     to ap_location_outbox for the Python bridge.
   - Grants items the bridge puts in ap_item_inbox (spells, zone keys, items, money).
   - Fences zones the player has no key for.
@@ -43,6 +43,10 @@ end
 local function lockedSpells()
     return (ArchipelagoData and ArchipelagoData.locked_spells) or {}
 end
+
+local function trainerChecks()
+    return (ArchipelagoData and ArchipelagoData.trainer_checks) or {}
+end
 -- Where fenced players are sent (Northshire Abbey, human start).
 AP.RETURN_POINT = { map = 0, x = -8949.95, y = -132.49, z = 83.53, o = 0.0 }
 
@@ -56,6 +60,8 @@ local PLAYER_EVENT_ON_COMMAND        = 42
 local PLAYER_EVENT_ON_LEARN_SPELL    = 44
 local PLAYER_EVENT_ON_COMPLETE_QUEST = 54
 local SERVER_EVENT_ON_ADDON_MESSAGE  = 30
+local GOSSIP_EVENT_ON_HELLO          = 1
+local GOSSIP_EVENT_ON_SELECT         = 2
 local CHAT_MSG_WHISPER               = 7
 
 -- Per-character runtime state, keyed by low guid.
@@ -396,6 +402,157 @@ RegisterPlayerEvent(PLAYER_EVENT_ON_COMMAND, function(_, player, command)
         return false
     end
 end)
+
+---------------------------------------------------------------------------------------
+-- class trainer checks
+---------------------------------------------------------------------------------------
+-- Class trainers sell one Archipelago check per pooled spell, at that spell's level and
+-- price. The trainer's menu is replaced for linked characters of our class; everyone
+-- else gets the normal menu.
+
+local CLASS_WARRIOR    = 1
+local SENDER_MAIN      = 8701   -- intid: one of the MENU_* actions
+local SENDER_BUY       = 8702   -- intid: spell id of the check
+local MENU_CHECKS, MENU_TRAIN, MENU_TALENTS, MENU_BACK = 1, 2, 3, 4
+local GOSSIP_ICON_CHAT, GOSSIP_ICON_TRAINER, GOSSIP_ICON_MONEY = 0, 3, 6
+local MAX_GOSSIP_ITEMS = 30     -- the client shows at most 32
+local UPCOMING_SHOWN   = 3      -- not yet affordable by level: preview a few
+
+-- Darker versions of AP's item colours: gossip text sits on light parchment.
+local function gossipContents(loc)
+    if loc.contents == "" then return "|cff555555an unknown item|r" end
+    local f, color = loc.flags or 0, "005f5f"
+    if f % 2 == 1 then color = "6a2ca0"
+    elseif f % 4 >= 2 then color = "1f3f9f"
+    elseif f % 8 >= 4 then color = "a0281e" end
+    return "|cff" .. color .. loc.contents .. "|r"
+end
+
+-- Trainer checks this character can still buy (location exists in the slot, not bought yet).
+local function openTrainerChecks(st)
+    local out = {}
+    for _, c in ipairs(trainerChecks()) do
+        local id = locId(AP.LOC.TRAINER, c.spell)
+        local loc = st.locations[id]
+        if loc and not loc.checked and not st.sent[id] then
+            table.insert(out, { check = c, loc = loc })
+        end
+    end
+    return out
+end
+
+local function usesTrainerChecks(player)
+    local st = getState(player)
+    return st and player:GetClass() == CLASS_WARRIOR and next(st.locations) ~= nil, st
+end
+
+local function greeting(creature)
+    local t = ArchipelagoData and ArchipelagoData.trainers
+    return (t and t[creature:GetEntry()]) or 1
+end
+
+local function showTrainerMain(player, creature, st)
+    player:GossipClearMenu()
+    player:GossipAddQuests(creature)
+    player:GossipMenuAddItem(GOSSIP_ICON_TRAINER, "I require warrior training.", SENDER_MAIN, MENU_TRAIN)
+    local open, ready = openTrainerChecks(st), 0
+    for _, o in ipairs(open) do
+        if player:GetLevel() >= o.check.level then ready = ready + 1 end
+    end
+    player:GossipMenuAddItem(GOSSIP_ICON_MONEY, string.format(
+        "Archipelago checks (%d for sale, %d later)", ready, #open - ready), SENDER_MAIN, MENU_CHECKS)
+    if player:GetLevel() >= 10 then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "I wish to unlearn my talents.", SENDER_MAIN, MENU_TALENTS,
+            false, "Are you sure you wish to unlearn all of your talents?", player:ResetTalentsCost())
+    end
+    player:GossipSendMenu(greeting(creature), creature)
+end
+
+local function showTrainerChecks(player, creature, st)
+    player:GossipClearMenu()
+    local level, items, upcoming = player:GetLevel(), 0, 0
+    for _, o in ipairs(openTrainerChecks(st)) do
+        if items >= MAX_GOSSIP_ITEMS then break end
+        local c = o.check
+        if level >= c.level then
+            player:GossipMenuAddItem(GOSSIP_ICON_MONEY,
+                string.format("%s check: %s", c.name, gossipContents(o.loc)), SENDER_BUY, c.spell, false,
+                string.format("Buy the %s check?\n\n%s", c.name, o.loc.contents ~= "" and o.loc.contents or "Unknown item"),
+                c.cost)
+            items = items + 1
+        elseif upcoming < UPCOMING_SHOWN then
+            player:GossipMenuAddItem(GOSSIP_ICON_CHAT, string.format(
+                "|cff555555Level %d: %s check: |r%s", c.level, c.name, gossipContents(o.loc)), SENDER_BUY, c.spell)
+            items, upcoming = items + 1, upcoming + 1
+        end
+    end
+    if items == 0 then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "|cff555555No checks left to buy.|r", SENDER_MAIN, MENU_CHECKS)
+    end
+    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "Back", SENDER_MAIN, MENU_BACK)
+    player:GossipSendMenu(greeting(creature), creature)
+end
+
+local function buyTrainerCheck(player, st, spellId)
+    for _, o in ipairs(openTrainerChecks(st)) do
+        local c = o.check
+        if c.spell == spellId then
+            if player:GetLevel() < c.level then
+                say(player, string.format("The %s check needs level %d.", c.name, c.level))
+            elseif player:GetCoinage() < c.cost then
+                player:SendNotification("You don't have enough money.")
+            else
+                player:ModifyMoney(-c.cost)
+                sendCheck(player, AP.LOC.TRAINER, c.spell)
+                say(player, string.format("Bought the %s check: %s", c.name,
+                    o.loc.contents ~= "" and o.loc.contents or "an unknown item"))
+            end
+            return
+        end
+    end
+end
+
+local function onTrainerHello(_, player, creature)
+    local ok, st = usesTrainerChecks(player)
+    if not ok then return false end   -- normal trainer menu
+    showTrainerMain(player, creature, st)
+    return true
+end
+
+local function onTrainerSelect(_, player, creature, sender, intid)
+    if sender ~= SENDER_MAIN and sender ~= SENDER_BUY then return false end
+    local ok, st = usesTrainerChecks(player)
+    if not ok then
+        player:GossipComplete()
+        return true
+    end
+    if sender == SENDER_BUY then
+        buyTrainerCheck(player, st, intid)
+        showTrainerChecks(player, creature, st)
+    elseif intid == MENU_CHECKS then
+        showTrainerChecks(player, creature, st)
+    elseif intid == MENU_TRAIN then
+        player:GossipComplete()
+        player:SendTrainerList(creature)
+    elseif intid == MENU_TALENTS then
+        player:GossipComplete()
+        player:ResetTalents(false)
+    else
+        showTrainerMain(player, creature, st)
+    end
+    return true
+end
+
+-- archipelago_data.lua may load after this file; register once the world is running.
+CreateLuaEvent(function()
+    local count = 0
+    for entry in pairs((ArchipelagoData and ArchipelagoData.trainers) or {}) do
+        RegisterCreatureGossipEvent(entry, GOSSIP_EVENT_ON_HELLO, onTrainerHello)
+        RegisterCreatureGossipEvent(entry, GOSSIP_EVENT_ON_SELECT, onTrainerSelect)
+        count = count + 1
+    end
+    print(string.format("[Archipelago] trainer checks on %d trainers", count))
+end, 1, 1)
 
 -- Messages from the addon (whispered to self).
 RegisterServerEvent(SERVER_EVENT_ON_ADDON_MESSAGE, function(_, sender, _, prefix, msg)
