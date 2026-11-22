@@ -29,12 +29,19 @@ class IncludeTrainerChecks(DefaultOnToggle):
 
 class RandomItemFiller(Range):
     """Percent of filler that is a random item from anywhere in the game (anything you could
-    loot, buy or get from a quest, with no level requirement; gear only up to item level 25).
+    loot, buy or get from a quest, with no level requirement; gear only up to item level 30).
     The rest is potions, bandages and money."""
     display_name = "Random Item Filler"
     range_start = 0
     range_end = 100
     default = 50
+
+
+class EndGameGear(DefaultOnToggle):
+    """Add one random end-game piece of gear per slot (head, shoulders, chest, weapon, off-hand,
+    ...) to the item pool: gear above item level 30 with no level requirement that a warrior
+    can wear. Different pieces every seed."""
+    display_name = "End-Game Gear"
 
 
 class ZoneKeyPlacement(Choice):
@@ -55,3 +62,4 @@ class WoWOptions(PerGameCommonOptions):
     include_trainer_checks: IncludeTrainerChecks
     zone_key_placement: ZoneKeyPlacement
     random_item_filler: RandomItemFiller
+    end_game_gear: EndGameGear

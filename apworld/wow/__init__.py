@@ -5,7 +5,7 @@ from BaseClasses import ItemClassification, LocationProgressType, Region, Tutori
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, Type, components, launch_subprocess
 
-from .data import (FILLER_ITEMS, GAME, GEAR, RANDOM_CATEGORY_WEIGHTS, RANDOM_ITEMS_BY_CATEGORY, REGIONS,
+from .data import (END_GAME_BY_SLOT, FILLER_ITEMS, GAME, GEAR, RANDOM_CATEGORY_WEIGHTS, RANDOM_ITEMS_BY_CATEGORY, REGIONS,
                    SPELLS, ZONE_KEYS, is_grindy_level, level_location_name)
 from .items import ITEM_CLASSIFICATION, ITEM_GROUPS, ITEM_TABLE, WoWItem
 from .locations import LOCATION_TABLE, WoWLocation, region_locations
@@ -143,6 +143,8 @@ class WoWWorld(World):
     def create_items(self) -> None:
         pool = [self.create_item(name) for name in self.place_zone_keys()]
         pool += [self.create_item(name) for name in SPELLS]
+        if self.options.end_game_gear:
+            pool += [self.create_item(self.random.choice(END_GAME_BY_SLOT[slot])) for slot in sorted(END_GAME_BY_SLOT)]
         open_slots = len(self.multiworld.get_unfilled_locations(self.player))
         gear = [name for name, (_entry, copies) in GEAR.items() for _ in range(copies)]
         self.random.shuffle(gear)

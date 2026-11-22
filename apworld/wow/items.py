@@ -2,7 +2,7 @@ from typing import Dict
 
 from BaseClasses import Item, ItemClassification
 
-from .data import FILLER_ITEMS, GEAR, RANDOM_ITEMS, SPELLS, ZONE_KEYS, ItemKind, item_id
+from .data import END_GAME_GEAR, FILLER_ITEMS, GEAR, RANDOM_ITEMS, SPELLS, ZONE_KEYS, ItemKind, item_id
 
 
 class WoWItem(Item):
@@ -34,6 +34,11 @@ for _name, _entry in RANDOM_ITEMS.items():
     ITEM_TABLE[_name] = item_id(ItemKind.GAME_ITEM, _entry)
     ITEM_CLASSIFICATION[_name] = ItemClassification.filler
 
+for _name, _entry in END_GAME_GEAR.items():
+    assert _name not in ITEM_TABLE, f"end-game item name clashes with {_name}"
+    ITEM_TABLE[_name] = item_id(ItemKind.GAME_ITEM, _entry)
+    ITEM_CLASSIFICATION[_name] = ItemClassification.useful
+
 assert len(set(ITEM_TABLE.values())) == len(ITEM_TABLE), "duplicate item id"
 
 ITEM_GROUPS = {
@@ -41,4 +46,5 @@ ITEM_GROUPS = {
     "Spells": set(SPELLS),
     "Gear": set(GEAR),
     "Random Items": set(RANDOM_ITEMS),
+    "End-Game Gear": set(END_GAME_GEAR),
 }

@@ -110,8 +110,17 @@ for _name, (_entry, _category) in gen_data.RANDOM_ITEMS.items():
 # How a random filler item is picked: a category by weight, then an item in it. Recipes are
 # about half the pool, so a plain uniform pick would mostly hand out end-game recipes.
 RANDOM_CATEGORY_WEIGHTS: Dict[str, int] = {
-    "gear": 30, "consumable": 25, "trade goods": 20, "other": 15, "recipe": 10,
+    "gear": 50, "consumable": 20, "trade goods": 10, "other": 10, "recipe": 5,
 }
+
+# End-game gear: one random piece per slot goes into each seed's pool. name -> item entry.
+END_GAME_GEAR: Dict[str, int] = {}
+END_GAME_BY_SLOT: Dict[str, List[str]] = {}
+for _name, (_entry, _slot) in gen_data.END_GAME_GEAR.items():
+    if _entry in _taken_entries or _name in FILLER_ITEMS or _name in GEAR or _name in RANDOM_ITEMS:
+        continue
+    END_GAME_GEAR[_name] = _entry
+    END_GAME_BY_SLOT.setdefault(_slot, []).append(_name)
 
 
 def location_name(kind: int, name: str) -> str:

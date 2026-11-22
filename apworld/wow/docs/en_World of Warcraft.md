@@ -16,6 +16,8 @@ anywhere else sends you back. Rares and the last levels of each zone only hold f
 
 Filler is a mix of potions, bandages, money and random items from anywhere in the
 game that have no level requirement (the `random_item_filler` option sets the mix).
+Each seed also hides one random end-game piece of gear per slot somewhere in the
+multiworld (the `end_game_gear` option).
 
 ## What is the goal?
 
