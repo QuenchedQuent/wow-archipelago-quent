@@ -208,6 +208,18 @@ class AreaGrid:
         return grid[lx * 16 + ly]
 
 
+def load_area_triggers(dbc_dir: str) -> Dict[int, Tuple[int, float, float]]:
+    """AreaTrigger id -> (map, x, y)."""
+    dbc = DBC(os.path.join(dbc_dir, "AreaTrigger.dbc"))
+    if dbc.fields != 10:
+        raise ValueError(f"AreaTrigger.dbc has {dbc.fields} fields; expected 10 (3.3.5a)")
+    out = {}
+    for off in dbc.rows():
+        x, y = struct.unpack_from("<ff", dbc.records, off + 8)
+        out[dbc.u32(off, 0)] = (dbc.u32(off, 1), x, y)
+    return out
+
+
 # ---------------------------------------------------------------------------------
 # Region classification
 # ---------------------------------------------------------------------------------
@@ -298,7 +310,8 @@ def best(regions: Set[Optional[int]]) -> Optional[int]:
     return min(known) if known else None
 
 
-def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]):
+def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area],
+                   triggers: Dict[int, Tuple[int, float, float]]):
     rows = query(cur, """
         SELECT q.ID, q.LogTitle, q.QuestLevel, q.MinLevel, q.QuestSortID, q.QuestInfoID,
                q.AllowableRaces, q.Flags, q.RewardSpell, q.RewardDisplaySpell,
@@ -306,6 +319,10 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
                COALESCE(a.ExclusiveGroup, 0), COALESCE(a.BreadcrumbForQuestId, 0),
                COALESCE(a.SpecialFlags, 0), COALESCE(a.RequiredSkillID, 0)
         FROM quest_template q LEFT JOIN quest_template_addon a ON a.ID = q.ID""")
+    objectives = {r[0]: r[1:] for r in query(cur, """
+        SELECT ID, StartItem, RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4,
+               RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5,
+               RequiredItemId6 FROM quest_template""")}
     disabled = {r[0] for r in query(cur, "SELECT entry FROM disables WHERE sourceType = 1")}
     event_quests = {r[0] for r in query(cur, "SELECT quest FROM game_event_creature_quest")}
     event_quests |= {r[0] for r in query(cur, "SELECT quest FROM game_event_gameobject_quest")}
@@ -383,14 +400,22 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
         q["region"] = max(parts)
         result[qid] = q
 
-    # Exclusive groups (>0): only one of the group can ever be done; keep the lowest id.
-    groups = defaultdict(list)
-    for qid, q in result.items():
-        if q["excl"] > 0:
-            groups[q["excl"]].append(qid)
-    for members in groups.values():
-        for qid in sorted(members)[1:]:
-            result.pop(qid, None)
+    # Objectives (mobs to kill, objects to use, items to collect, places to reach) must be
+    # doable inside our regions, and push the quest into the region where they are.
+    obj = objective_regions(cur, grid, regions, {qid: objectives[qid] for qid in result}, triggers)
+    for qid in list(result):
+        for where in obj.get(qid, []):
+            if not where:
+                continue                    # source unknown (e.g. made by a spell): no info
+            r = best(where)
+            if r is None:
+                del result[qid]             # only obtainable outside our regions
+                break
+            result[qid]["region"] = max(result[qid]["region"], r)
+
+    # A quest can't be picked up before its MinLevel: it belongs to the region owning that level.
+    for q in result.values():
+        q["region"] = max(q["region"], level_region(q["minlevel"]))
 
     # Prerequisites must be in the set too, and push the quest into the later region.
     changed = True
@@ -406,6 +431,113 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
             elif result[prev]["region"] > result[qid]["region"]:
                 result[qid]["region"] = result[prev]["region"]
                 changed = True
+
+    # Exclusive groups (>0): only one quest of the group can ever be done. The group is one
+    # location (lowest id) that any member completes, in the earliest member's region.
+    groups = defaultdict(list)
+    for qid, q in result.items():
+        if q["excl"] > 0:
+            groups[q["excl"]].append(qid)
+    aliases: Dict[int, int] = {}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        main, *others = sorted(members)
+        result[main]["region"] = min(result[m]["region"] for m in members)
+        for qid in others:
+            aliases[qid] = main
+            del result[qid]
+    # A quest after a merged member is reachable once the group is (any member counts).
+    for q in result.values():
+        prev = abs(q["prev"])
+        if prev in aliases:
+            q["prev"] = aliases[prev]
+    return result, aliases
+
+
+def level_region(level: int) -> int:
+    """First region whose level range reaches `level` (levels below the first count as region 0)."""
+    for i, r in enumerate(REGION_DEFS):
+        if level <= r["levels"][1]:
+            return i
+    return len(REGION_DEFS) - 1
+
+
+def is_early(q: dict, region: int) -> bool:
+    """Quick quests near the start of a region: a good home for the next zone's key."""
+    first = REGION_DEFS[region]["levels"][0]
+    return q["region"] == region and 0 < q["level"] <= first + 1
+
+
+def objective_regions(cur, grid: AreaGrid, regions: Regions, objectives: Dict[int, tuple],
+                      triggers: Dict[int, Tuple[int, float, float]]) -> Dict[int, List[Set[Optional[int]]]]:
+    """quest -> one set of regions per objective (where it can be done; empty = unknown)."""
+    npcs, gos, items = set(), set(), set()
+    for start_item, *rest in objectives.values():
+        npcs |= {n for n in rest[:4] if n > 0}
+        gos |= {-n for n in rest[:4] if n < 0}
+        items |= {i for i in rest[4:] if i and i != start_item}
+
+    # Kill credit: an objective npc may be credited by other creatures (KillCredit1/2).
+    creditors = defaultdict(set)
+    for entry, k1, k2 in query(cur, "SELECT entry, KillCredit1, KillCredit2 FROM creature_template "
+                                    "WHERE KillCredit1 > 0 OR KillCredit2 > 0"):
+        for k in (k1, k2):
+            if k in npcs:
+                creditors[k].add(entry)
+
+    # Item sources: creature loot, chest loot, vendors.
+    item_npcs, item_gos = defaultdict(set), defaultdict(set)
+    if items:
+        ids = ",".join(map(str, items))
+        for entry, item in query(cur, f"""
+                SELECT t.entry, l.Item FROM creature_loot_template l
+                JOIN creature_template t ON t.lootid = l.Entry
+                WHERE l.Reference = 0 AND l.Item IN ({ids})"""):
+            item_npcs[item].add(entry)
+        for entry, item in query(cur, f"SELECT entry, item FROM npc_vendor WHERE item IN ({ids})"):
+            item_npcs[item].add(entry)
+        for entry, item in query(cur, f"""
+                SELECT g.entry, l.Item FROM gameobject_loot_template l
+                JOIN gameobject_template g ON g.type = 3 AND g.Data1 = l.Entry
+                WHERE l.Reference = 0 AND l.Item IN ({ids})"""):
+            item_gos[item].add(entry)
+
+    all_npcs = npcs | {c for cs in creditors.values() for c in cs} | {e for es in item_npcs.values() for e in es}
+    all_gos = gos | {g for gs in item_gos.values() for g in gs}
+    npc_at = spawn_regions(cur, grid, regions, "creature", "game_event_creature", all_npcs)
+    go_at = spawn_regions(cur, grid, regions, "gameobject", "game_event_gameobject", all_gos)
+
+    def where(npc_ids=(), go_ids=()):
+        out: Set[Optional[int]] = set()
+        for n in npc_ids:
+            out |= npc_at.get(n, set())
+        for g in go_ids:
+            out |= go_at.get(g, set())
+        return out
+
+    trig_quests = defaultdict(list)
+    for trig, quest in query(cur, "SELECT id, quest FROM areatrigger_involvedrelation"):
+        if quest in objectives:
+            trig_quests[quest].append(trig)
+
+    result: Dict[int, List[Set[Optional[int]]]] = {}
+    for qid, (start_item, *rest) in objectives.items():
+        found = []
+        for n in rest[:4]:
+            if n > 0:
+                found.append(where([n] + sorted(creditors.get(n, ()))))
+            elif n < 0:
+                found.append(where(go_ids=[-n]))
+        for i in rest[4:]:
+            if i and i != start_item:
+                found.append(where(item_npcs.get(i, ()), item_gos.get(i, ())))
+        for trig in trig_quests.get(qid, []):
+            t = triggers.get(trig)
+            if t:
+                m, x, y = t
+                found.append({regions.of_area(grid.area_at(m, x, y)) if m == MAP_ID else None})
+        result[qid] = found
     return result
 
 
@@ -587,7 +719,8 @@ def write_python(path: str, regions_out: list, spells_out: Dict[str, dict], gear
         "",
         f"MAX_LEVEL = {MAX_LEVEL}",
         "",
-        "# name, key item, (first level, last level), quests, explore, rares",
+        "# name, key item, (first level, last level), quests, explore, rares,",
+        "# early: quick quests near the start, where the next zone's key can be placed",
         "REGIONS = " + pprint.pformat(regions_out, width=100, sort_dicts=False),
         "",
         "ZONE_KEYS = " + pprint.pformat(ZONE_KEYS, width=100),
@@ -610,7 +743,7 @@ def write_python(path: str, regions_out: list, spells_out: Dict[str, dict], gear
 
 
 def write_lua(path: str, free_areas: Set[int], locked: List[int], trainer_out: Dict[str, dict],
-              npcs: Dict[int, int]):
+              npcs: Dict[int, int], aliases: Dict[int, int]):
     def lua_set(ids):
         return "{ " + ", ".join(f"[{i}] = true" for i in sorted(ids)) + " }"
     def lua_str(t):
@@ -620,6 +753,7 @@ def write_lua(path: str, free_areas: Set[int], locked: List[int], trainer_out: D
         f"name = {lua_str(n.removeprefix('Trainer: '))} }},"
         for n, s in trainer_out.items())
     trainers = ", ".join(f"[{e}] = {t}" for e, t in sorted(npcs.items()))
+    alias_text = ", ".join(f"[{q}] = {m}" for q, m in sorted(aliases.items()))
     text = f"""-- Generated by tools/extract_data.py from the AzerothCore world DB. Do not edit.
 -- Read lazily by archipelago.lua (script load order does not matter).
 ArchipelagoData = {{
@@ -630,6 +764,8 @@ ArchipelagoData = {{
     }},
     -- Spells that are Archipelago items: unlearned unless received from the multiworld.
     locked_spells = {lua_set(locked)},
+    -- Either/or quests: completing one of these counts as the listed quest's location.
+    quest_aliases = {{ {alias_text} }},
     -- Class trainer NPC entry -> greeting text; they sell the checks below.
     trainers = {{ {trainers} }},
     -- Trainer checks: bought from a class trainer in place of the spell (location kind 5).
@@ -689,6 +825,7 @@ def main(argv=None):
 
     areas = load_areas(os.path.join(args.data, "dbc"))
     spells = load_spells(os.path.join(args.data, "dbc"))
+    triggers = load_area_triggers(os.path.join(args.data, "dbc"))
     grid = AreaGrid(os.path.join(args.data, "maps"))
     northshire = northshire_areas(areas)
     regions = Regions(areas, northshire)
@@ -703,7 +840,7 @@ def main(argv=None):
     conn = pymysql.connect(host=args.host, port=args.port, user=args.user, password=args.password,
                            database=args.world_db, ssl={"check_hostname": False})
     with conn.cursor() as cur:
-        quests = extract_quests(cur, grid, regions, areas)
+        quests, quest_aliases = extract_quests(cur, grid, regions, areas, triggers)
         rares = extract_rares(cur, grid, regions)
         sp = extract_spells(cur, spells, quests)
         gear, strip = extract_rewards(cur, quests)
@@ -733,6 +870,7 @@ def main(argv=None):
             "quests": {n: q["id"] for n, q in all_q.items() if q["region"] == i},
             "explore": {n: a["id"] for n, a in all_e.items() if a["region"] == i},
             "rares": {n: c["id"] for n, c in all_r.items() if c["region"] == i},
+            "early": [n for n, q in all_q.items() if is_early(q, i)],
         })
 
     pool = sorted(sp["pool"].values(), key=lambda s: (s["level"], s["id"]))
@@ -750,13 +888,15 @@ def main(argv=None):
                  trainer_out)
     write_reward_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_quest_rewards.sql"), strip)
     write_lua(os.path.join(ROOT, "server", "lua_scripts", "archipelago_data.lua"), northshire, locked,
-              trainer_out, sp["npcs"])
+              trainer_out, sp["npcs"], quest_aliases)
     os.makedirs(os.path.join(ROOT, "server", "sql", "world"), exist_ok=True)
     write_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_trainers.sql"), sp["trainers"], locked)
 
     print(f"Northshire areas: {sorted(northshire)}  (start position area {start_area})")
+    print(f"Either/or quest aliases: {quest_aliases or 'none'}")
     for r in regions_out:
-        print(f"{r['name']:18} quests {len(r['quests']):3}  explore {len(r['explore']):2}  rares {len(r['rares']):2}")
+        print(f"{r['name']:18} quests {len(r['quests']):3}  explore {len(r['explore']):2}  rares {len(r['rares']):2}"
+              f"  early {len(r['early'])}")
     print(f"Gear: {sum(g['copies'] for g in gear_out.values())} items from {len(strip)} quests")
     for name, g in gear_out.items():
         print(f"  L{g['req']:<2} {g['id']:>6} x{g['copies']}  {name}")

@@ -1,14 +1,14 @@
 from typing import Any, ClassVar, Dict
 
 import settings
-from BaseClasses import ItemClassification, Region, Tutorial
+from BaseClasses import ItemClassification, LocationProgressType, Region, Tutorial
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, Type, components, launch_subprocess
 
-from .data import FILLER_ITEMS, GAME, GEAR, REGIONS, SPELLS, ZONE_KEYS
+from .data import FILLER_ITEMS, GAME, GEAR, REGIONS, SPELLS, ZONE_KEYS, is_grindy_level, level_location_name
 from .items import ITEM_CLASSIFICATION, ITEM_GROUPS, ITEM_TABLE, WoWItem
 from .locations import LOCATION_TABLE, WoWLocation, region_locations
-from .options import WoWOptions
+from .options import WoWOptions, ZoneKeyPlacement
 
 
 def launch_client(*args: str) -> None:
@@ -97,6 +97,7 @@ class WoWWorld(World):
                                     bool(self.options.include_rares),
                                     bool(self.options.include_trainer_checks))
             region.add_locations(dict(locs), WoWLocation)
+            self.exclude_grindy(region, rdata)
             self.multiworld.regions.append(region)
 
             if rdata.key_item:
@@ -115,8 +116,36 @@ class WoWWorld(World):
         goal.place_locked_item(WoWItem("Victory", ItemClassification.progression, None, self.player))
         goal_region.locations.append(goal)
 
+    def exclude_grindy(self, region: Region, rdata) -> None:
+        """Rares (long respawns) and a region's last levels (grinding) only hold filler,
+        so nobody's progression waits on them."""
+        grindy = {f"Rare: {mob}" for mob in rdata.rares}
+        grindy |= {level_location_name(lvl) for lvl in rdata.levels if is_grindy_level(rdata, lvl)}
+        grindy |= {name for name in rdata.trainer if is_grindy_level(rdata, rdata.trainer_levels[name])}
+        for loc in region.locations:
+            if loc.name in grindy:
+                loc.progress_type = LocationProgressType.EXCLUDED
+
+    def place_zone_keys(self) -> list:
+        """Handle Zone keys per the placement option; returns the keys left for the pool."""
+        mode = self.options.zone_key_placement.value
+        if mode == ZoneKeyPlacement.option_anywhere:
+            return list(ZONE_KEYS)
+        if mode == ZoneKeyPlacement.option_start_with:
+            for name in ZONE_KEYS:
+                self.multiworld.push_precollected(self.create_item(name))
+            return []
+        # Early: on a quick quest of the previous region, in this world.
+        for previous, rdata in zip(REGIONS, REGIONS[1:]):
+            if not rdata.key_item:
+                continue
+            spots = [loc for name in previous.early
+                     if (loc := self.multiworld.get_location(name, self.player)).item is None]
+            self.random.choice(spots).place_locked_item(self.create_item(rdata.key_item))
+        return []
+
     def create_items(self) -> None:
-        pool = [self.create_item(name) for name in ZONE_KEYS]
+        pool = [self.create_item(name) for name in self.place_zone_keys()]
         pool += [self.create_item(name) for name in SPELLS]
         open_slots = len(self.multiworld.get_unfilled_locations(self.player))
         gear = [name for name, (_entry, copies) in GEAR.items() for _ in range(copies)]

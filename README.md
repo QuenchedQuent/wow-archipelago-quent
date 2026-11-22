@@ -58,6 +58,20 @@ Every spell in the pool is an Archipelago item. Trainers don't teach them (see t
 the server script unlearns any that arrive some other way, such as class quest rewards or
 characters created earlier, unless the player received that spell from the multiworld.
 
+## Logic
+- **Regions:** Northshire, then Elwynn Forest (needs `Zone: Elwynn Forest`), then Westfall
+  (needs `Zone: Westfall`). Each region owns a level range; your level is limited by which
+  zones' mobs you can reach.
+- **Quest regions:** a quest belongs to the latest of: where it starts and ends, where its
+  objectives are (mobs, objects, item drops, vendors, places to reach), its prerequisites, and
+  the region owning its minimum level. Quests whose objectives are only outside our zones are
+  dropped. Either/or quests (exclusive groups) are one location that any of them completes.
+- **Zone keys** are progression. `zone_key_placement`: `early` (default) puts each key on a
+  quick quest near the start of the zone before it, in your own world; `anywhere` randomizes
+  normally; `start_with` gives you both.
+- **Grindy checks hold only filler:** rares (long respawns), and the last 2 levels of each
+  region (Reach Level and trainer checks), so no one's progression waits on them.
+
 ## Trainer checks
 Each trainer spell in the pool (25 for a Warrior, levels 1 to 20) becomes a `Trainer: <spell>`
 location. Every class trainer sells them, each at the spell's usual level and price. For linked

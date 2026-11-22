@@ -11,6 +11,10 @@ Class trainers no longer teach the shuffled spells. Instead they sell one
 Archipelago check per spell, at the spell's usual level and price. Talk to the
 trainer and pick "Archipelago checks" to see what each one holds.
 
+By default each Zone key is on one of the first quests of the zone before it, in your
+own world (the `zone_key_placement` option), so you never wait for other players to move
+on. Rares and the last levels of each zone only hold filler.
+
 ## What is the goal?
 
 Reach the configured goal level.

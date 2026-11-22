@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import DefaultOnToggle, PerGameCommonOptions, Range
+from Options import Choice, DefaultOnToggle, PerGameCommonOptions, Range
 
 
 class GoalLevel(Range):
@@ -27,9 +27,23 @@ class IncludeTrainerChecks(DefaultOnToggle):
     display_name = "Include Trainer Checks"
 
 
+class ZoneKeyPlacement(Choice):
+    """Where the Zone keys (Elwynn Forest, Westfall) are placed. They are always progression.
+    Early: each key is on one of the first quests of the zone before it, in your own world,
+    so you never wait on other players or grind for it.
+    Anywhere: normal randomization; a key may be in another player's world.
+    Start With: you start with every Zone key."""
+    display_name = "Zone Key Placement"
+    option_early = 0
+    option_anywhere = 1
+    option_start_with = 2
+    default = 0
+
+
 @dataclass
 class WoWOptions(PerGameCommonOptions):
     goal_level: GoalLevel
     include_exploration: IncludeExploration
     include_rares: IncludeRares
     include_trainer_checks: IncludeTrainerChecks
+    zone_key_placement: ZoneKeyPlacement

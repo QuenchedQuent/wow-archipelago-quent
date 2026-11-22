@@ -124,10 +124,25 @@ end
 
 -- Robust quest detection: any tracked quest that is rewarded counts, even if the
 -- event hook was missed (server restart, reload, hook semantics).
+-- Either/or quests (only one can ever be done) share one location: alias -> location quest.
+local function questAliases()
+    return (ArchipelagoData and ArchipelagoData.quest_aliases) or {}
+end
+
+local function questLocation(questId)
+    return questAliases()[questId] or questId
+end
+
 local function sweepQuests(player, st)
     for id, _ in pairs(st.locations) do
         local kind, questId = decode(id, AP.LOC_BASE)
         if kind == AP.LOC.QUEST and not st.sent[id] and player:GetQuestRewardStatus(questId) then
+            sendCheck(player, AP.LOC.QUEST, questId)
+        end
+    end
+    for alias, questId in pairs(questAliases()) do
+        local id = locId(AP.LOC.QUEST, questId)
+        if st.locations[id] and not st.sent[id] and player:GetQuestRewardStatus(alias) then
             sendCheck(player, AP.LOC.QUEST, questId)
         end
     end
@@ -381,7 +396,7 @@ RegisterPlayerEvent(PLAYER_EVENT_ON_LOGOUT, function(_, player)
 end)
 
 RegisterPlayerEvent(PLAYER_EVENT_ON_COMPLETE_QUEST, function(_, player, quest)
-    sendCheck(player, AP.LOC.QUEST, quest:GetId())
+    sendCheck(player, AP.LOC.QUEST, questLocation(quest:GetId()))
 end)
 
 -- Don't unlearn inside the learn hook (the core is mid-way through learnSpell, e.g.
