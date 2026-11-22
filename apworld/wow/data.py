@@ -110,7 +110,7 @@ for _name, (_entry, _category) in gen_data.RANDOM_ITEMS.items():
 # How a random filler item is picked: a category by weight, then an item in it. Recipes are
 # about half the pool, so a plain uniform pick would mostly hand out end-game recipes.
 RANDOM_CATEGORY_WEIGHTS: Dict[str, int] = {
-    "gear": 50, "consumable": 20, "trade goods": 10, "other": 10, "recipe": 5,
+    "gear": 55, "consumable": 20, "trade goods": 10, "other": 10, "recipe": 5,
 }
 
 # End-game gear: one random piece per slot goes into each seed's pool. name -> item entry.

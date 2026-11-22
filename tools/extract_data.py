@@ -85,12 +85,13 @@ INVTYPE_CLOAK = 16
 # Random filler items: anything obtainable in the game (loot, vendors, quest rewards) with no
 # level requirement. Weapons/armor are capped at this item level so filler can't outclass
 # the content (the data has level-80 gear with RequiredLevel 0). Gear above the cap is the
-# end-game pool: each seed adds one random piece per slot (END_GAME_SLOTS) that a warrior can use.
+# end-game pool: each seed adds one random piece per slot (END_GAME_SLOTS). Neither pool is
+# limited to our race or class: any character may get anything, even if they can't use it.
 RANDOM_GEAR_MAX_ITEM_LEVEL = 30
 END_GAME_SLOTS = {   # slot name -> InventoryTypes
     "Head": (1,), "Neck": (2,), "Shoulders": (3,), "Back": (16,), "Chest": (5, 20), "Wrists": (9,),
     "Hands": (10,), "Waist": (6,), "Legs": (7,), "Feet": (8,), "Finger": (11,), "Trinket": (12,),
-    "Weapon": (13, 17, 21), "Off-hand": (14, 22, 23), "Ranged": (15, 25, 26),
+    "Weapon": (13, 17, 21), "Off-hand": (14, 22, 23), "Ranged": (15, 25, 26, 28),
 }
 RANDOM_EXCLUDED_CLASSES = (10, 12, 13)          # currency, quest, key
 RANDOM_NOT_GEAR_INVTYPES = (0, 4, 19)           # not equippable, shirt, tabard: no power
@@ -629,8 +630,8 @@ def extract_rewards(cur, quests: Dict[int, dict]):
 def extract_random_items(cur, skip: Set[int]) -> Tuple[List[dict], List[dict]]:
     """(filler pool, end-game pool): obtainable items without a level requirement (see
     RANDOM_* above). Leaves out grey junk, unique items (a second copy can't be delivered),
-    temporary and holiday items, quest/key/currency items, and items another race or class
-    can't use. End-game: gear above the item level cap that a warrior can wear, by slot."""
+    temporary and holiday items, and quest/key/currency items. Race and class don't matter.
+    End-game: gear above the item level cap, by slot."""
     slot_of = {inv: slot for slot, invs in END_GAME_SLOTS.items() for inv in invs}
     obtainable: Set[int] = set()
     for table in ("creature_loot_template", "gameobject_loot_template", "reference_loot_template",
@@ -653,8 +654,6 @@ def extract_random_items(cur, skip: Set[int]) -> Tuple[List[dict], List[dict]]:
         WHERE RequiredLevel = 0 AND class NOT IN ({','.join(map(str, RANDOM_EXCLUDED_CLASSES))})
           AND startquest = 0 AND Quality BETWEEN 1 AND 4 AND duration = 0 AND HolidayId = 0
           AND (Flags & {ITEM_FLAG_DEPRECATED}) = 0 AND maxcount = 0 AND bonding NOT IN (4, 5)
-          AND (AllowableRace IN (-1, 0) OR (AllowableRace & {RACE_MASK}))
-          AND (AllowableClass IN (-1, 0) OR (AllowableClass & {CLASS_MASK}))
           AND name NOT REGEXP %s""", (RANDOM_NAME_BLOCKLIST,))
     filler, end_game = [], []
     for entry, name, cls, sub, ilvl, inv, classes, races in rows:
@@ -662,8 +661,7 @@ def extract_random_items(cur, skip: Set[int]) -> Tuple[List[dict], List[dict]]:
             continue
         gear = cls in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR) and inv not in RANDOM_NOT_GEAR_INVTYPES
         if gear and ilvl > RANDOM_GEAR_MAX_ITEM_LEVEL:
-            usable = warrior_score(dict(classes=classes, races=races, cls=cls, sub=sub, inv=inv)) is not None
-            if usable and inv in slot_of:
+            if inv in slot_of:
                 end_game.append(dict(id=entry, name=name, slot=slot_of[inv], level=ilvl))
             continue
         category = "gear" if gear else RANDOM_CATEGORIES.get(cls, "other")

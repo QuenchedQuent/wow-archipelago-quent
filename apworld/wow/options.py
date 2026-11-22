@@ -39,8 +39,8 @@ class RandomItemFiller(Range):
 
 class EndGameGear(DefaultOnToggle):
     """Add one random end-game piece of gear per slot (head, shoulders, chest, weapon, off-hand,
-    ...) to the item pool: gear above item level 30 with no level requirement that a warrior
-    can wear. Different pieces every seed."""
+    ...) to the item pool: gear above item level 30 with no level requirement. Any class's gear
+    can come up, so a piece may be one you can't use. Different pieces every seed."""
     display_name = "End-Game Gear"
 
 

@@ -79,17 +79,17 @@ characters created earlier, unless the player received that spell from the multi
 Filler is potions, bandages and money (`FILLER_ITEMS` in `data.py`) mixed with random items from
 anywhere in the game. `random_item_filler` (0-100, default 50) is the percent that is random.
 The extractor's random pool is every item you can loot, buy or get from a quest with no level
-requirement, minus grey junk, unique, temporary, holiday, quest, key and currency items, and
-items your race or class can't use. Weapons and armor are capped at item level 30, because the
+requirement, minus grey junk, unique, temporary, holiday, quest, key and currency items. It is
+not limited to your race or class, so some items may be unusable for you. Weapons and armor are capped at item level 30, because the
 data has end-game gear with no level requirement. A random pick chooses a category first
-(gear 50, consumables 20, trade goods 10, other 10, recipes 5; `RANDOM_CATEGORY_WEIGHTS`), then
+(gear 55, consumables 20, trade goods 10, other 10, recipes 5; `RANDOM_CATEGORY_WEIGHTS`), then
 an item, since recipes are about half the pool.
 
 ## End-game gear
-Gear above that cap (no level requirement, usable by a warrior) is the end-game pool. With
+Gear above that cap (no level requirement, any class) is the end-game pool. With
 `end_game_gear` on (default), each seed adds one random piece per slot to the item pool as a
 useful item: head, neck, shoulders, back, chest, wrists, hands, waist, legs, feet, finger,
-trinket, weapon, off-hand and ranged (`END_GAME_SLOTS` in the extractor).
+trinket, weapon, off-hand and ranged/relic (`END_GAME_SLOTS` in the extractor).
 
 ## Trainer checks
 Each trainer spell in the pool (25 for a Warrior, levels 1 to 20) becomes a `Trainer: <spell>`
