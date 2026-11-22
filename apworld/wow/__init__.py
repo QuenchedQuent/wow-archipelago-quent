@@ -5,10 +5,16 @@ from BaseClasses import ItemClassification, LocationProgressType, Region, Tutori
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, Type, components, launch_subprocess
 
-from .data import (END_GAME_BY_SLOT, FILLER_ITEMS, GAME, GEAR, RANDOM_CATEGORY_WEIGHTS, RANDOM_ITEMS_BY_CATEGORY, REGIONS,
-                   SPELLS, ZONE_KEYS, is_grindy_level, level_location_name)
+try:
+    from Options import OptionError
+except ImportError:  # older Archipelago
+    OptionError = Exception
+
+from .data import (CLASS_SPELLS, CLASSES, END_GAME_BY_SLOT, FILLER_ITEMS, GAME, GEAR_BY_QUEST, RACES,
+                   RANDOM_CATEGORY_WEIGHTS, RANDOM_ITEMS_BY_CATEGORY, REGIONS, VALID_CLASSES, ZONE_KEYS,
+                   is_grindy_level, level_location_name, slot_quests, trainer_locations)
 from .items import ITEM_CLASSIFICATION, ITEM_GROUPS, ITEM_TABLE, WoWItem
-from .locations import LOCATION_TABLE, WoWLocation, region_locations
+from .locations import LOCATION_TABLE, WoWLocation, slot_locations
 from .options import WoWOptions, ZoneKeyPlacement
 
 
@@ -64,8 +70,9 @@ class WoWWeb(WebWorld):
 
 class WoWWorld(World):
     """
-    World of Warcraft on a 3.3.5 AzerothCore private server. Quests, levels,
-    exploration, rare kills and class trainer purchases are checks; spells and zone access are items.
+    World of Warcraft on a 3.3.5 AzerothCore private server, for any Alliance race and class.
+    Quests, levels, exploration, rare kills and class trainer purchases are checks; your
+    class's spells, zone access and gear are items.
     """
     game = GAME
     web = WoWWeb()
@@ -78,6 +85,16 @@ class WoWWorld(World):
     item_name_to_id = ITEM_TABLE
     location_name_to_id = LOCATION_TABLE
     item_name_groups = ITEM_GROUPS
+
+    race: int
+    cls: int
+
+    def generate_early(self) -> None:
+        self.race = self.options.character_race.value
+        self.cls = self.options.character_class.value
+        if self.cls not in VALID_CLASSES[self.race]:
+            raise OptionError(f"{self.player_name}: a {RACES[self.race]} can't be a {CLASSES[self.cls]}. "
+                              f"Pick one of: {', '.join(CLASSES[c] for c in VALID_CLASSES[self.race])}.")
 
     def create_item(self, name: str) -> WoWItem:
         return WoWItem(name, ITEM_CLASSIFICATION[name], self.item_name_to_id[name], self.player)
@@ -97,11 +114,10 @@ class WoWWorld(World):
         previous = menu
         goal_level = self.options.goal_level.value
         goal_region = None
-        for rdata in REGIONS:
+        per_region = slot_locations(self.race, self.cls, bool(self.options.include_exploration),
+                                    bool(self.options.include_rares), bool(self.options.include_trainer_checks))
+        for rdata, locs in zip(REGIONS, per_region):
             region = Region(rdata.name, self.player, self.multiworld)
-            locs = region_locations(rdata, bool(self.options.include_exploration),
-                                    bool(self.options.include_rares),
-                                    bool(self.options.include_trainer_checks))
             region.add_locations(dict(locs), WoWLocation)
             self.exclude_grindy(region, rdata)
             self.multiworld.regions.append(region)
@@ -126,7 +142,8 @@ class WoWWorld(World):
         so nobody's progression waits on them."""
         grindy = {f"Rare: {mob}" for mob in rdata.rares}
         grindy |= {level_location_name(lvl) for lvl in rdata.levels if is_grindy_level(rdata, lvl)}
-        grindy |= {name for name in rdata.trainer if is_grindy_level(rdata, rdata.trainer_levels[name])}
+        grindy |= {name for name, _spell, level, _region in trainer_locations(self.cls)
+                   if level in rdata.levels and is_grindy_level(rdata, level)}
         for loc in region.locations:
             if loc.name in grindy:
                 loc.progress_type = LocationProgressType.EXCLUDED
@@ -141,15 +158,25 @@ class WoWWorld(World):
         return list(ZONE_KEYS)
 
     def create_items(self) -> None:
+        unfilled = self.multiworld.get_unfilled_locations(self.player)
+        # Filler-only locations (rares, grindy levels) need one filler item each, so the
+        # optional items (end-game gear, then quest gear) only take what is left.
+        room = len(unfilled) - sum(1 for loc in unfilled if loc.progress_type == LocationProgressType.EXCLUDED)
+
         pool = [self.create_item(name) for name in self.place_zone_keys()]
-        pool += [self.create_item(name) for name in SPELLS]
+        pool += [self.create_item(name) for name in CLASS_SPELLS[self.cls]]
+        optional = []
         if self.options.end_game_gear:
-            pool += [self.create_item(self.random.choice(END_GAME_BY_SLOT[slot])) for slot in sorted(END_GAME_BY_SLOT)]
-        open_slots = len(self.multiworld.get_unfilled_locations(self.player))
-        gear = [name for name, (_entry, copies) in GEAR.items() for _ in range(copies)]
+            optional += [self.random.choice(END_GAME_BY_SLOT[slot]) for slot in sorted(END_GAME_BY_SLOT)]
+        # Gear of this slot's quest locations: the fixed rewards and one of each choose-one.
+        gear = []
+        for q, _region in slot_quests(self.race, self.cls):
+            fixed, choice = GEAR_BY_QUEST.get(q.id, ([], []))
+            gear += fixed + ([self.random.choice(choice)] if choice else [])
         self.random.shuffle(gear)
-        pool += [self.create_item(name) for name in gear[:max(0, open_slots - len(pool))]]
-        pool += [self.create_item(self.get_filler_item_name()) for _ in range(open_slots - len(pool))]
+        optional += gear
+        pool += [self.create_item(name) for name in optional[:max(0, room - len(pool))]]
+        pool += [self.create_item(self.get_filler_item_name()) for _ in range(len(unfilled) - len(pool))]
         self.multiworld.itempool += pool
 
     def set_rules(self) -> None:
@@ -158,5 +185,7 @@ class WoWWorld(World):
     def fill_slot_data(self) -> Dict[str, Any]:
         return {
             "goal_level": self.options.goal_level.value,
+            "race": self.race,
+            "class": self.cls,
             "zone_locks": list(ZONE_KEYS.values()),
         }

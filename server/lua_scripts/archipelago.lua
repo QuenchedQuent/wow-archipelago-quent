@@ -43,12 +43,15 @@ local function zoneLocks()
     return (ArchipelagoData and ArchipelagoData.zone_locks) or AP.FALLBACK_ZONE_LOCKS
 end
 
-local function lockedSpells()
-    return (ArchipelagoData and ArchipelagoData.locked_spells) or {}
+-- Per class (player:GetClass()): spells that are Archipelago items, and trainer checks.
+local function lockedSpells(player)
+    local t = ArchipelagoData and ArchipelagoData.locked_spells
+    return (t and t[player:GetClass()]) or {}
 end
 
-local function trainerChecks()
-    return (ArchipelagoData and ArchipelagoData.trainer_checks) or {}
+local function trainerChecks(player)
+    local t = ArchipelagoData and ArchipelagoData.trainer_checks
+    return (t and t[player:GetClass()]) or {}
 end
 local function fenceMap()
     return (ArchipelagoData and ArchipelagoData.fence_map) or AP.FALLBACK_FENCE_MAP
@@ -129,26 +132,30 @@ end
 
 -- Robust quest detection: any tracked quest that is rewarded counts, even if the
 -- event hook was missed (server restart, reload, hook semantics).
--- Either/or quests (only one can ever be done) share one location: alias -> location quest.
-local function questAliases()
-    return (ArchipelagoData and ArchipelagoData.quest_aliases) or {}
+-- Either/or quests (exclusive groups: only one can ever be done) are one location in a slot,
+-- whichever member the APWorld picked. Completing any member checks it.
+local function questGroup(questId)
+    local t = ArchipelagoData and ArchipelagoData.quest_groups
+    return (t and t[questId]) or { questId }
 end
 
-local function questLocation(questId)
-    return questAliases()[questId] or questId
+local function sendQuestCheck(player, st, questId)
+    for _, member in ipairs(questGroup(questId)) do
+        local id = locId(AP.LOC.QUEST, member)
+        if member == questId or st.locations[id] then sendCheck(player, AP.LOC.QUEST, member) end
+    end
 end
 
 local function sweepQuests(player, st)
     for id, _ in pairs(st.locations) do
         local kind, questId = decode(id, AP.LOC_BASE)
-        if kind == AP.LOC.QUEST and not st.sent[id] and player:GetQuestRewardStatus(questId) then
-            sendCheck(player, AP.LOC.QUEST, questId)
-        end
-    end
-    for alias, questId in pairs(questAliases()) do
-        local id = locId(AP.LOC.QUEST, questId)
-        if st.locations[id] and not st.sent[id] and player:GetQuestRewardStatus(alias) then
-            sendCheck(player, AP.LOC.QUEST, questId)
+        if kind == AP.LOC.QUEST and not st.sent[id] then
+            for _, member in ipairs(questGroup(questId)) do
+                if player:GetQuestRewardStatus(member) then
+                    sendCheck(player, AP.LOC.QUEST, questId)
+                    break
+                end
+            end
         end
     end
 end
@@ -223,7 +230,7 @@ end
 -- Remove locked spells the player knows without having received them from Archipelago
 -- (quest rewards, characters that existed before, anything that slipped past trainers).
 local function stripLockedSpells(player, st, announce)
-    for spellId in pairs(lockedSpells()) do
+    for spellId in pairs(lockedSpells(player)) do
         if not st.spells[spellId] and player:HasSpell(spellId) then
             player:RemoveSpell(spellId)
             if announce then
@@ -286,7 +293,7 @@ local function sendLocation(player, id, loc)
     -- T <spell> <level> <copper> <spell name>: what the trainer window needs for a trainer check.
     local kind, spell = decode(id, AP.LOC_BASE)
     if kind == AP.LOC.TRAINER then
-        for _, c in ipairs(trainerChecks()) do
+        for _, c in ipairs(trainerChecks(player)) do
             if c.spell == spell then toAddon(player, "T", c.spell, c.level, c.cost, c.name) end
         end
     end
@@ -436,14 +443,15 @@ RegisterPlayerEvent(PLAYER_EVENT_ON_LOGOUT, function(_, player)
 end)
 
 RegisterPlayerEvent(PLAYER_EVENT_ON_COMPLETE_QUEST, function(_, player, quest)
-    sendCheck(player, AP.LOC.QUEST, questLocation(quest:GetId()))
+    local st = getState(player)
+    if st then sendQuestCheck(player, st, quest:GetId()) end
 end)
 
 -- Don't unlearn inside the learn hook (the core is mid-way through learnSpell, e.g.
 -- handing out quest rewards); flag it and strip on the next tick instead.
 RegisterPlayerEvent(PLAYER_EVENT_ON_LEARN_SPELL, function(_, player, spellId)
     local st = getState(player)
-    if st and lockedSpells()[spellId] and not st.spells[spellId] then
+    if st and lockedSpells(player)[spellId] and not st.spells[spellId] then
         st.stripPending = true
     end
 end)
@@ -501,13 +509,13 @@ local TRAINER_RANGE = 15   -- yards: you must be at a class trainer to buy
 local function atClassTrainer(player)
     local trainers = (ArchipelagoData and ArchipelagoData.trainers) or {}
     for _, creature in ipairs(player:GetCreaturesInRange(TRAINER_RANGE) or {}) do
-        if trainers[creature:GetEntry()] then return true end
+        if trainers[creature:GetEntry()] == player:GetClass() then return true end
     end
     return false
 end
 
 local function buyTrainerCheck(player, st, spellId)
-    for _, c in ipairs(trainerChecks()) do
+    for _, c in ipairs(trainerChecks(player)) do
         if c.spell == spellId then
             local id = locId(AP.LOC.TRAINER, c.spell)
             local loc = st.locations[id]
@@ -515,7 +523,7 @@ local function buyTrainerCheck(player, st, spellId)
             if loc.checked or st.sent[id] then
                 toAddon(player, "B", id)                     -- already bought: resync the addon
             elseif not atClassTrainer(player) then
-                say(player, "Talk to a class trainer to buy that check.")
+                say(player, "Talk to a trainer of your class to buy that check.")
             elseif player:GetLevel() < c.level then
                 say(player, string.format("The %s check needs level %d.", c.name, c.level))
             elseif player:GetCoinage() < c.cost then

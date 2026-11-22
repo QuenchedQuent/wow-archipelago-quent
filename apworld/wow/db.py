@@ -60,9 +60,14 @@ class BridgeDB:
         rows = self._all("SELECT char_guid FROM ap_state WHERE seed_name = %s AND slot_name = %s", (seed, slot))
         return int(rows[0][0]) if rows else None
 
-    def unlinked_online_characters(self) -> List[Tuple[int, str]]:
-        return [(int(g), n) for g, n in self._all(
-            "SELECT c.guid, c.name FROM characters c LEFT JOIN ap_state s ON s.char_guid = c.guid "
+    def character_race_class(self, guid: int) -> Optional[Tuple[int, int]]:
+        rows = self._all("SELECT race, class FROM characters WHERE guid = %s", (guid,))
+        return (int(rows[0][0]), int(rows[0][1])) if rows else None
+
+    def unlinked_online_characters(self) -> List[Tuple[int, str, int, int]]:
+        """(guid, name, race, class) of online characters not linked to a seed."""
+        return [(int(g), n, int(r), int(c)) for g, n, r, c in self._all(
+            "SELECT c.guid, c.name, c.race, c.class FROM characters c LEFT JOIN ap_state s ON s.char_guid = c.guid "
             "WHERE c.online = 1 AND (s.char_guid IS NULL OR s.seed_name = '')")]
 
     def stored_seed(self, guid: int) -> str:

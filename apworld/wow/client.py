@@ -19,7 +19,7 @@ from CommonClient import (
 )
 from NetUtils import ClientStatus
 
-from .data import GAME, LOC_BASE, KIND_SIZE
+from .data import CLASSES, GAME, KIND_SIZE, LOC_BASE, RACES
 from .db import BridgeDB
 
 GOAL_LOCATION_ID = LOC_BASE + 9 * KIND_SIZE  # kind 9 = goal sentinel, never a real AP location
@@ -115,10 +115,18 @@ class WoWContext(CommonContext):
             self.hint("Waiting for the server's seed name...")
             return None
 
+        # The slot is generated for one race and class (its quests, spells and trainer checks).
+        want = (self.slot_data.get("race"), self.slot_data.get("class"))
+        want_text = f"{RACES.get(want[0], '?')} {CLASSES.get(want[1], '?')}"
+
         if self.character_name:
             guid = await asyncio.to_thread(db.character_guid, self.character_name)
             if guid is None:
                 self.hint(f"No WoW character named {self.character_name} exists yet.")
+                return None
+            have = await asyncio.to_thread(db.character_race_class, guid)
+            if None not in want and have != want:
+                self.hint(f"{self.character_name} isn't a {want_text}, which this slot was generated for.")
                 return None
             stored = await asyncio.to_thread(db.stored_seed, guid)
             if stored and stored != seed:
@@ -127,13 +135,18 @@ class WoWContext(CommonContext):
                 return None
             return await self.new_link(guid)
 
-        candidates = await asyncio.to_thread(db.unlinked_online_characters)
+        online = await asyncio.to_thread(db.unlinked_online_characters)
+        candidates = [c for c in online if None in want or (c[2], c[3]) == want]
         if len(candidates) == 1:
             return await self.new_link(candidates[0][0])
         if not candidates:
-            self.hint("Waiting for you to log in to WoW with a fresh character...")
+            if online:
+                names = ", ".join(f"{n} ({RACES.get(r, '?')} {CLASSES.get(c, '?')})" for _, n, r, c in online)
+                self.hint(f"This slot is for a {want_text}; the fresh characters online are {names}.")
+            else:
+                self.hint(f"Waiting for you to log in to WoW with a fresh {want_text}...")
         else:
-            names = ", ".join(n for _, n in candidates)
+            names = ", ".join(n for _, n, _, _ in candidates)
             self.hint(f"Several fresh characters are online ({names}). Pick one with /character <name>.")
         return None
 

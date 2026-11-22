@@ -32,10 +32,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------------
 # Scope of the MVP. Everything else is derived from the data.
 # ---------------------------------------------------------------------------------
-RACE_MASK = 1        # Human
-CLASS_ID = 1         # Warrior
-CLASS_MASK = 1 << (CLASS_ID - 1)
-CLASS_QUEST_SORT = -81   # QuestSort "Warrior"
+# Playable characters: the Alliance races (Elwynn Forest is hostile to the Horde; other races
+# are fenced into Northshire from their own start) and every class but the Death Knight,
+# which starts at level 55 in its own zone. Quests, spells and trainer checks are kept per
+# race/class; the APWorld picks a slot's own from its race and class options.
+RACES = {1: "Human", 3: "Dwarf", 4: "Night Elf", 7: "Gnome", 11: "Draenei"}
+CLASSES = {1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest", 7: "Shaman",
+           8: "Mage", 9: "Warlock", 11: "Druid"}
+RACE_MASK = sum(1 << (r - 1) for r in RACES)       # quests some playable race can take
+CLASS_MASK = sum(1 << (c - 1) for c in CLASSES)
+CLASS_QUEST_SORTS = {-81: 1, -141: 2, -261: 3, -162: 4, -262: 5, -82: 7, -161: 8, -61: 9, -263: 11}
 MAX_LEVEL = 20
 MAP_ID = 0           # Eastern Kingdoms
 
@@ -77,10 +83,6 @@ SPELL_EFFECT_LEARN_SPELL = 36
 # Quest reward gear (weapons/armor) becomes Archipelago items; the quest's AP check replaces it.
 ITEM_CLASS_WEAPON = 2
 ITEM_CLASS_ARMOR = 4
-# Warrior proficiencies before level 40 (no plate yet).
-WARRIOR_WEAPONS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 15, 16, 18}
-ARMOR_SCORE = {0: 3, 1: 2, 2: 3, 3: 4, 6: 3}    # misc, cloth, leather, mail, shield
-INVTYPE_CLOAK = 16
 
 # Random filler items: anything obtainable in the game (loot, vendors, quest rewards) with no
 # level requirement. Weapons/armor are capped at this item level so filler can't outclass
@@ -363,7 +365,7 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
             continue
         if classes and not (classes & CLASS_MASK):
             continue
-        if sort not in sort_ok and sort != CLASS_QUEST_SORT:
+        if sort not in sort_ok and sort not in CLASS_QUEST_SORTS:
             continue
         if minlevel > MAX_LEVEL or info in EXCLUDED_QUEST_INFO or skill:
             continue
@@ -372,7 +374,7 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
         if special & SPECIAL_FLAG_REPEATABLE:
             continue
         cand[qid] = dict(id=qid, title=title, level=qlevel, minlevel=minlevel, sort=sort,
-                         prev=prev, excl=excl, class_quest=bool(classes),
+                         prev=prev, excl=excl, class_quest=bool(classes), races=races, classes=classes,
                          reward_spells=[s for s in (rspell, rdspell) if s])
 
     ids = set(cand)
@@ -450,27 +452,16 @@ def extract_quests(cur, grid: AreaGrid, regions: Regions, areas: Dict[int, Area]
                 result[qid]["region"] = result[prev]["region"]
                 changed = True
 
-    # Exclusive groups (>0): only one quest of the group can ever be done. The group is one
-    # location (lowest id) that any member completes, in the earliest member's region.
+    # Exclusive groups (>0): only one quest of a group can ever be done (often one per race or
+    # class). The APWorld makes the members a slot can take one location; any of them checks it.
     groups = defaultdict(list)
     for qid, q in result.items():
         if q["excl"] > 0:
             groups[q["excl"]].append(qid)
-    aliases: Dict[int, int] = {}
-    for members in groups.values():
-        if len(members) < 2:
-            continue
-        main, *others = sorted(members)
-        result[main]["region"] = min(result[m]["region"] for m in members)
-        for qid in others:
-            aliases[qid] = main
-            del result[qid]
-    # A quest after a merged member is reachable once the group is (any member counts).
+    groups = {g: sorted(m) for g, m in groups.items() if len(m) > 1}
     for q in result.values():
-        prev = abs(q["prev"])
-        if prev in aliases:
-            q["prev"] = aliases[prev]
-    return result, aliases
+        q["group"] = q["excl"] if q["excl"] in groups else 0
+    return result, groups
 
 
 def level_region(level: int) -> int:
@@ -553,19 +544,6 @@ def objective_regions(cur, grid: AreaGrid, regions: Regions, objectives: Dict[in
     return result
 
 
-def warrior_score(item: dict) -> Optional[int]:
-    """How much a warrior wants this item (None = can't use it)."""
-    if item["classes"] not in (-1, 0) and not (item["classes"] & CLASS_MASK):
-        return None
-    if item["races"] not in (-1, 0) and not (item["races"] & RACE_MASK):
-        return None
-    if item["cls"] == ITEM_CLASS_WEAPON:
-        return 3 if item["sub"] in WARRIOR_WEAPONS else None
-    if item["inv"] == INVTYPE_CLOAK:
-        return 3
-    return ARMOR_SCORE.get(item["sub"])
-
-
 def extract_rewards(cur, quests: Dict[int, dict]):
     """Pick the gear each quest location gives, and which reward columns to clear."""
     ids = ",".join(map(str, quests))
@@ -597,7 +575,7 @@ def extract_rewards(cur, quests: Dict[int, dict]):
         return bool(it and it["cls"] in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR) and it["inv"]
                     and not it["startquest"] and entry not in protected)
 
-    gear: List[dict] = []                 # one entry per copy in the pool
+    gear: Dict[int, dict] = {}            # quest -> {"fixed": [items], "choice": [items]}
     new_rewards: Dict[int, Dict[str, int]] = {}   # quest -> every reward column, gear removed
     for row in rows:
         fixed = [(row[f"RewardItem{i}"], row[f"RewardAmount{i}"]) for i in range(1, 5)]
@@ -606,11 +584,9 @@ def extract_rewards(cur, quests: Dict[int, dict]):
         choice_gear = [e for e, _ in choices if e and is_gear(e)]
         if not fixed_gear and not choice_gear:
             continue
-        gear += [items[e] for e in fixed_gear]
-        scored = [(warrior_score(items[e]), items[e]["ilvl"], items[e]["quality"], e) for e in choice_gear]
-        scored = [s for s in scored if s[0] is not None]
-        if scored:
-            gear.append(items[max(scored)[3]])
+        # Every class can play, so a "choose one" reward keeps all its options; each seed
+        # puts one of them in the pool (the APWorld picks).
+        gear[row["ID"]] = {"fixed": [items[e] for e in fixed_gear], "choice": [items[e] for e in choice_gear]}
 
         # The core stops reading reward slots at the first empty one, so the remaining
         # rewards are moved up instead of leaving gaps.
@@ -683,64 +659,55 @@ def extract_rares(cur, grid: AreaGrid, regions: Regions):
     return result
 
 
-def extract_spells(cur, spells: Dict[int, Spell], quests: Dict[int, dict]):
-    trainers = [r[0] for r in query(cur, "SELECT Id FROM trainer WHERE Type = 0 AND Requirement = %s",
-                                    (CLASS_ID,))]
-    pool: Dict[int, dict] = {}
+def extract_spells(cur, spells: Dict[int, Spell], quests: Dict[int, dict], grid: AreaGrid,
+                   regions: Regions) -> Dict[int, dict]:
+    """Per class: trainer ids, spell pool (trainer spells up to MAX_LEVEL plus spells taught by
+    class quests), trainer NPC entries, and the earliest region with one of its trainers."""
     source = "trainer_spell"
     if table_exists(cur, TRAINER_BACKUP):
         source = f"(SELECT * FROM trainer_spell UNION SELECT * FROM {TRAINER_BACKUP})"
-    for spell_id, req_level, cost in query(
-            cur, f"SELECT SpellId, MIN(ReqLevel), MIN(MoneyCost) FROM {source} t "
-                 f"WHERE TrainerId IN ({','.join(map(str, trainers))}) AND ReqLevel <= %s "
-                 f"GROUP BY SpellId",
-            (MAX_LEVEL,)):
-        pool[spell_id] = dict(id=spell_id, level=int(req_level), cost=int(cost), source="trainer")
+    out: Dict[int, dict] = {}
+    for cls in CLASSES:
+        trainers = [r[0] for r in query(cur, "SELECT Id FROM trainer WHERE Type = 0 AND Requirement = %s", (cls,))]
+        pool: Dict[int, dict] = {}
+        if trainers:
+            for spell_id, req_level, cost in query(
+                    cur, f"SELECT SpellId, MIN(ReqLevel), MIN(MoneyCost) FROM {source} t "
+                         f"WHERE TrainerId IN ({','.join(map(str, trainers))}) AND ReqLevel <= %s "
+                         f"GROUP BY SpellId", (MAX_LEVEL,)):
+                pool[spell_id] = dict(id=spell_id, level=int(req_level), cost=int(cost), source="trainer")
 
-    # Spells taught by class quests (e.g. stances), resolved through LEARN_SPELL effects.
-    for q in quests.values():
-        if not q["class_quest"]:
-            continue
-        for sid in q["reward_spells"]:
-            s = spells.get(sid)
-            if not s:
-                continue
-            taught = [t for e, t in zip(s.effects, s.triggers) if e == SPELL_EFFECT_LEARN_SPELL and t]
-            for t in taught or [sid]:
-                pool.setdefault(t, dict(id=t, level=q["minlevel"], source=f"quest {q['id']}"))
+        # Spells taught by this class's quests up to MAX_LEVEL (stances, pet taming, forms, totems),
+        # through LEARN_SPELL effects. Wherever the quest is: many are in racial starting zones
+        # outside the fence, so these arrive from the multiworld instead.
+        for qid, minlevel, rspell, rdspell in query(cur, f"""
+                SELECT q.ID, q.MinLevel, q.RewardSpell, q.RewardDisplaySpell
+                FROM quest_template q JOIN quest_template_addon a ON a.ID = q.ID
+                WHERE (a.AllowableClasses & {1 << (cls - 1)}) AND q.MinLevel <= %s
+                  AND (q.RewardSpell > 0 OR q.RewardDisplaySpell > 0)
+                  AND q.ID NOT IN (SELECT entry FROM disables WHERE sourceType = 1)""", (MAX_LEVEL,)):
+            for sid in {x for x in (rspell, rdspell) if x}:
+                sp = spells.get(sid)
+                if not sp:
+                    continue
+                taught = [t for e, t in zip(sp.effects, sp.triggers) if e == SPELL_EFFECT_LEARN_SPELL and t]
+                for t in taught or [sid]:
+                    if t in spells:
+                        pool.setdefault(t, dict(id=t, level=max(1, minlevel), source=f"quest {qid}"))
 
-    for sid, entry in pool.items():
-        s = spells.get(sid)
-        if not s:
-            raise ValueError(f"Spell {sid} not in Spell.dbc")
-        entry["base"] = s.name
-        entry["rank"] = s.rank
-    return {"trainers": trainers, "pool": pool, "npcs": extract_trainer_npcs(cur, trainers)}
+        for sid, entry in pool.items():
+            sp = spells.get(sid)
+            if not sp:
+                raise ValueError(f"Spell {sid} not in Spell.dbc")
+            entry["base"], entry["rank"] = sp.name, sp.rank
 
-
-def extract_trainer_npcs(cur, trainers: List[int]) -> Dict[int, int]:
-    """Class trainer creature entry -> greeting npc_text id (the one shown to our class).
-    Only trainers with a gossip menu: the server script replaces that menu."""
-    out: Dict[int, int] = {}
-    rows = query(cur, f"""
-        SELECT t.entry, g.TextID, c.ConditionTypeOrReference, c.ConditionValue1, c.NegativeCondition
-        FROM creature_default_trainer d
-        JOIN creature_template t ON t.entry = d.CreatureId
-        LEFT JOIN gossip_menu g ON g.MenuID = t.gossip_menu_id
-        LEFT JOIN conditions c ON c.SourceTypeOrReferenceId = 14 AND c.SourceGroup = g.MenuID
-             AND c.SourceEntry = g.TextID
-        WHERE d.TrainerId IN ({','.join(map(str, trainers))}) AND (t.npcflag & 1)
-        ORDER BY t.entry, g.TextID""")
-    for entry, text_id, ctype, cvalue, negative in rows:
-        if text_id is None:
-            out.setdefault(entry, 1)
-            continue
-        if ctype == 15:   # CONDITION_CLASS
-            ok = bool(cvalue & CLASS_MASK) != bool(negative)
-            if ok:
-                out[entry] = text_id
-        else:
-            out.setdefault(entry, text_id)
+        npcs = set()
+        if trainers:
+            npcs = {r[0] for r in query(cur, "SELECT CreatureId FROM creature_default_trainer "
+                                             f"WHERE TrainerId IN ({','.join(map(str, trainers))})")}
+        at = spawn_regions(cur, grid, regions, "creature", "game_event_creature", npcs)
+        region = best(set().union(*at.values()) if at else set())
+        out[cls] = dict(trainers=trainers, pool=pool, npcs=npcs, region=region)
     return out
 
 
@@ -760,42 +727,91 @@ def unique_names(items: List[dict], name_of) -> Dict[str, dict]:
     return out
 
 
-def spell_item_name(s: dict, base_counts: Dict[str, int]) -> str:
-    if base_counts[s["base"]] > 1 and s["rank"]:
-        return f"Spell: {s['base']} ({s['rank']})"
-    return f"Spell: {s['base']}"
+def spell_names(per_class: Dict[int, dict]) -> Dict[int, str]:
+    """Spell id -> unique item name across all classes: "Spell: Charge", with the rank when
+    a name has several ranks, and the class when two classes have different spells of the
+    same name and rank."""
+    info: Dict[int, dict] = {}
+    for cls, c in per_class.items():
+        for sid, sp in c["pool"].items():
+            info.setdefault(sid, dict(sp, classes=set()))["classes"].add(cls)
+    by_base = defaultdict(set)
+    for sid, sp in info.items():
+        by_base[sp["base"]].add(sid)
+    names: Dict[int, str] = {}
+    for sid, sp in info.items():
+        name = f"Spell: {sp['base']}"
+        if len(by_base[sp["base"]]) > 1 and sp["rank"]:
+            name += f" ({sp['rank']})"
+        names[sid] = name
+    counts = Counter(names.values())
+    for sid, name in names.items():
+        if counts[name] > 1:
+            names[sid] = f"{name} - {'/'.join(CLASSES[c] for c in sorted(info[sid]['classes']))}"
+    counts = Counter(names.values())
+    for sid, name in names.items():
+        if counts[name] > 1:
+            names[sid] = f"{name} ({sid})"
+    return names
 
 
-def write_python(path: str, regions_out: list, spells_out: Dict[str, dict], gear_out: Dict[str, dict],
-                 trainer_out: Dict[str, dict], random_out: Dict[str, int], end_game_out: Dict[str, tuple]):
+def write_python(path: str, regions_out: list, quests_out: list, spell_names_: Dict[int, str],
+                 per_class: Dict[int, dict], gear_names: Dict[int, str], gear_by_quest: Dict[int, dict],
+                 random_out: Dict[str, tuple], end_game_out: Dict[str, tuple]):
+    def fmt(obj):
+        return pprint.pformat(obj, width=100, sort_dicts=False)
+    class_spells = {cls: {spell_names_[sid]: sp["level"] for sid, sp in
+                          sorted(c["pool"].items(), key=lambda kv: (kv[1]["level"], kv[0]))}
+                    for cls, c in per_class.items()}
+    trainer_checks = {cls: {"Trainer: " + spell_names_[sid].removeprefix("Spell: "): (sid, sp["level"], sp["cost"])
+                            for sid, sp in sorted(c["pool"].items(), key=lambda kv: (kv[1]["level"], kv[0]))
+                            if sp["source"] == "trainer"}
+                      for cls, c in per_class.items() if c["region"] is not None}
     lines = [
         '"""Generated by tools/extract_data.py from the AzerothCore world DB. Do not edit."""',
         "",
         f"MAX_LEVEL = {MAX_LEVEL}",
         "",
-        "# name, key item, (first level, last level), quests, explore, rares",
-        "REGIONS = " + pprint.pformat(regions_out, width=100, sort_dicts=False),
+        "# Playable races and classes (game ids)",
+        "RACES = " + fmt(RACES),
+        "CLASSES = " + fmt(CLASSES),
         "",
-        "ZONE_KEYS = " + pprint.pformat(ZONE_KEYS, width=100),
+        "# name, key item, (first level, last level), explore, rares",
+        "REGIONS = " + fmt(regions_out),
         "",
-        "# item name -> (spell id, level it is normally available)",
-        "SPELLS = " + pprint.pformat({n: (s["id"], s["level"]) for n, s in spells_out.items()},
-                                     width=100, sort_dicts=False),
+        "ZONE_KEYS = " + fmt(ZONE_KEYS),
         "",
-        "# Class trainer checks (bought in place of a pooled spell): location name -> (spell id, level, copper)",
-        "TRAINER_CHECKS = " + pprint.pformat({n: (s["id"], s["level"], s["cost"]) for n, s in trainer_out.items()},
-                                             width=100, sort_dicts=False),
+        "# Quests: location name, quest id, region, race/class masks (0 = any), prerequisite quest,",
+        "# exclusive group (0 = none; only one member can ever be done)",
+        "QUESTS = " + fmt(quests_out),
         "",
-        "# Quest reward gear moved into the item pool: item name -> (item entry, copies, required level)",
-        "GEAR = " + pprint.pformat({n: (g["id"], g["copies"], g["req"]) for n, g in gear_out.items()},
-                                   width=100, sort_dicts=False),
+        "# Spell items: item name -> spell id",
+        "SPELLS = " + fmt({spell_names_[sid]: sid for sid in sorted(spell_names_)}),
+        "",
+        "# Each class's spell pool: class -> {item name: level it is normally learned}",
+        "CLASS_SPELLS = " + fmt(class_spells),
+        "",
+        "# Class trainer checks (bought in place of a pooled spell):",
+        "# class -> {location name: (spell id, level, copper)}",
+        "TRAINER_CHECKS = " + fmt(trainer_checks),
+        "",
+        "# Earliest region with a trainer of each class (trainer checks need it too)",
+        "TRAINER_REGION = " + fmt({cls: c["region"] for cls, c in per_class.items() if c["region"] is not None}),
+        "",
+        "# Quest reward gear moved into the item pool: item name -> item entry",
+        "GEAR_ITEMS = " + fmt({gear_names[e]: e for e in sorted(gear_names)}),
+        "# quest -> (fixed gear names, choose-one gear names); a seed adds the fixed ones and",
+        "# one of the choices for each quest that is a location in that slot",
+        "GEAR_BY_QUEST = " + fmt({q: ([gear_names[i["id"]] for i in g["fixed"]],
+                                      [gear_names[i["id"]] for i in g["choice"]])
+                                  for q, g in sorted(gear_by_quest.items())}),
         "",
         "# Random filler items (obtainable, no level requirement): item name -> (item entry, category)",
-        "RANDOM_ITEMS = " + pprint.pformat(random_out, width=100, sort_dicts=False),
+        "RANDOM_ITEMS = " + fmt(random_out),
         "",
-        "# End-game gear (no level requirement, above the filler item level cap, usable by our class):",
+        "# End-game gear (no level requirement, above the filler item level cap):",
         "# item name -> (item entry, slot). Each seed adds one random piece per slot to the pool.",
-        "END_GAME_GEAR = " + pprint.pformat(end_game_out, width=100, sort_dicts=False),
+        "END_GAME_GEAR = " + fmt(end_game_out),
         "",
     ]
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -815,23 +831,33 @@ def fence_zones(areas: Dict[int, Area], free_areas: Set[int]) -> List[dict]:
     return out
 
 
-def write_lua(path: str, fence: List[dict], locked: List[int], trainer_out: Dict[str, dict],
-              npcs: Dict[int, int], aliases: Dict[int, int]):
+def write_lua(path: str, fence: List[dict], per_class: Dict[int, dict], spell_names_: Dict[int, str],
+              groups: Dict[int, List[int]]):
     def lua_set(ids):
         return "{ " + ", ".join(f"[{i}] = true" for i in sorted(ids)) + " }"
     def lua_str(t):
         return '"' + t.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    checks = "\n".join(
-        f"        {{ spell = {s['id']}, level = {s['level']}, cost = {s['cost']}, "
-        f"name = {lua_str(n.removeprefix('Trainer: '))} }},"
-        for n, s in trainer_out.items())
-    trainers = ", ".join(f"[{e}] = {t}" for e, t in sorted(npcs.items()))
-    alias_text = ", ".join(f"[{q}] = {m}" for q, m in sorted(aliases.items()))
+    locked = "\n".join(f"        [{cls}] = {lua_set(c['pool'])},  -- {CLASSES[cls]}"
+                        for cls, c in per_class.items())
+    checks = []
+    for cls, c in per_class.items():
+        if c["region"] is None:
+            continue
+        rows = "\n".join(
+            f"            {{ spell = {sid}, level = {sp['level']}, cost = {sp['cost']}, "
+            f"name = {lua_str(spell_names_[sid].removeprefix('Spell: '))} }},"
+            for sid, sp in sorted(c["pool"].items(), key=lambda kv: (kv[1]["level"], kv[0]))
+            if sp["source"] == "trainer")
+        checks.append(f"        [{cls}] = {{  -- {CLASSES[cls]}\n{rows}\n        }},")
+    trainers = ", ".join(f"[{e}] = {cls}" for cls, c in per_class.items() for e in sorted(c["npcs"]))
+    group_text = ", ".join(f"[{q}] = {{ {', '.join(map(str, members))} }}"
+                           for members in groups.values() for q in members)
     zones = "\n".join(
         f"        [{z['zone']}] = {{ name = {lua_str(z['name'])}, key = {z['key']}, "
         f"key_name = {lua_str(z['key_name'])}"
         + (f", free_areas = {lua_set(z['free'])}" if z["free"] else "") + " },"
         for z in fence)
+    nl = "\n"
     text = f"""-- Generated by tools/extract_data.py from the AzerothCore world DB. Do not edit.
 -- Read lazily by archipelago.lua (script load order does not matter).
 ArchipelagoData = {{
@@ -842,15 +868,18 @@ ArchipelagoData = {{
     zone_locks = {{
 {zones}
     }},
-    -- Spells that are Archipelago items: unlearned unless received from the multiworld.
-    locked_spells = {lua_set(locked)},
-    -- Either/or quests: completing one of these counts as the listed quest's location.
-    quest_aliases = {{ {alias_text} }},
-    -- Class trainer NPC entries (-> greeting text); you must stand at one to buy a check.
+    -- Per class: spells that are Archipelago items, unlearned unless received from the multiworld.
+    locked_spells = {{
+{locked}
+    }},
+    -- Either/or quests: quest -> every member of its exclusive group (completing any one
+    -- checks whichever member is the slot's location).
+    quest_groups = {{ {group_text} }},
+    -- Class trainer NPC entry -> class; you must stand at one of your class to buy a check.
     trainers = {{ {trainers} }},
-    -- Trainer checks: bought from a class trainer in place of the spell (location kind 5).
+    -- Per class: trainer checks, bought from a class trainer in place of the spell (location kind 5).
     trainer_checks = {{
-{checks}
+{nl.join(checks)}
     }},
 }}
 """
@@ -858,9 +887,11 @@ ArchipelagoData = {{
         f.write(text)
 
 
-def write_sql(path: str, trainers: List[int], locked: List[int]):
-    where = (f"`TrainerId` IN ({', '.join(map(str, trainers))})\n"
-             f"  AND `SpellId` IN ({', '.join(map(str, sorted(locked)))})")
+def write_sql(path: str, per_class: Dict[int, dict]):
+    conds = [f"(`TrainerId` IN ({', '.join(map(str, c['trainers']))})\n"
+             f"   AND `SpellId` IN ({', '.join(map(str, sorted(c['pool'])))}))"
+             for c in per_class.values() if c["trainers"] and c["pool"]]
+    where = "\n  OR ".join(conds)
     text = f"""-- Generated by tools/extract_data.py. Do not edit.
 -- Class trainers no longer teach spells that are Archipelago items (they arrive from the
 -- multiworld instead), so players can't pay for a spell the server would take away again.
@@ -920,18 +951,16 @@ def main(argv=None):
     conn = pymysql.connect(host=args.host, port=args.port, user=args.user, password=args.password,
                            database=args.world_db, ssl={"check_hostname": False})
     with conn.cursor() as cur:
-        quests, quest_aliases = extract_quests(cur, grid, regions, areas, triggers)
+        quests, groups = extract_quests(cur, grid, regions, areas, triggers)
         rares = extract_rares(cur, grid, regions)
-        sp = extract_spells(cur, spells, quests)
-        gear, strip = extract_rewards(cur, quests)
-        random_items, end_game = extract_random_items(cur, {g["id"] for g in gear})
+        per_class = extract_spells(cur, spells, quests, grid, regions)
+        gear_by_quest, strip = extract_rewards(cur, quests)
+        gear_items = {i["id"]: i for g in gear_by_quest.values() for i in g["fixed"] + g["choice"]}
+        random_items, end_game = extract_random_items(cur, set(gear_items))
     conn.close()
 
-    by_entry: Dict[int, dict] = {}
-    for g in gear:
-        by_entry.setdefault(g["id"], dict(g, copies=0))["copies"] += 1
-    gear_out = {f"Item: {n}": g for n, g in unique_names(
-        sorted(by_entry.values(), key=lambda g: (g["req"], g["id"])), lambda g: g["name"]).items()}
+    gear_names = {it["id"]: f"Item: {n}" for n, it in unique_names(
+        sorted(gear_items.values(), key=lambda i: i["id"]), lambda i: i["name"]).items()}
 
     on_grid = areas_on_grid(os.path.join(args.data, "maps"), MAP_ID) | INDOOR_AREAS
     explore = [dict(id=a.id, name=a.name, region=regions.of_area(a.id))
@@ -948,55 +977,47 @@ def main(argv=None):
     for i, r in enumerate(REGION_DEFS):
         regions_out.append({
             "name": r["name"], "key": r["key"], "levels": r["levels"],
-            "quests": {n: q["id"] for n, q in all_q.items() if q["region"] == i},
             "explore": {n: a["id"] for n, a in all_e.items() if a["region"] == i},
             "rares": {n: c["id"] for n, c in all_r.items() if c["region"] == i},
         })
+    quests_out = [dict(name=n, id=q["id"], region=q["region"], races=q["races"], classes=q["classes"],
+                       prev=abs(q["prev"]), group=q["group"]) for n, q in all_q.items()]
 
-    pool = sorted(sp["pool"].values(), key=lambda s: (s["level"], s["id"]))
-    base_counts = defaultdict(int)
-    for s in pool:
-        base_counts[s["base"]] += 1
-    spells_out = {spell_item_name(s, base_counts): s for s in pool}
-    if len(spells_out) != len(pool):
-        sys.exit("Duplicate spell item names")
-    locked = [s["id"] for s in pool]
+    names = spell_names(per_class)
+    taken = set(gear_names.values())
     random_out = {}
     for n, it in unique_names(sorted(random_items, key=lambda i: i["id"]), lambda i: i["name"]).items():
         name = f"Item: {n}"
-        random_out[name if name not in gear_out else f"{name} ({it['id']})"] = (it["id"], it["category"])
+        random_out[name if name not in taken else f"{name} ({it['id']})"] = (it["id"], it["category"])
+    taken |= set(random_out)
     end_game_out = {}
     for n, it in unique_names(sorted(end_game, key=lambda i: i["id"]), lambda i: i["name"]).items():
         name = f"Item: {n}"
-        if name in gear_out or name in random_out:
-            name = f"{name} ({it['id']})"
-        end_game_out[name] = (it["id"], it["slot"])
-    trainer_out = {"Trainer: " + n.removeprefix("Spell: "): s for n, s in spells_out.items()
-                   if s["source"] == "trainer"}
+        end_game_out[name if name not in taken else f"{name} ({it['id']})"] = (it["id"], it["slot"])
 
-    write_python(os.path.join(ROOT, "apworld", "wow", "gen_data.py"), regions_out, spells_out, gear_out,
-                 trainer_out, random_out, end_game_out)
+    write_python(os.path.join(ROOT, "apworld", "wow", "gen_data.py"), regions_out, quests_out, names,
+                 per_class, gear_names, gear_by_quest, random_out, end_game_out)
     write_reward_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_quest_rewards.sql"), strip)
-    write_lua(os.path.join(ROOT, "server", "lua_scripts", "archipelago_data.lua"), fence_zones(areas, northshire), locked,
-              trainer_out, sp["npcs"], quest_aliases)
+    write_lua(os.path.join(ROOT, "server", "lua_scripts", "archipelago_data.lua"),
+              fence_zones(areas, northshire), per_class, names, groups)
     os.makedirs(os.path.join(ROOT, "server", "sql", "world"), exist_ok=True)
-    write_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_trainers.sql"), sp["trainers"], locked)
+    write_sql(os.path.join(ROOT, "server", "sql", "world", "archipelago_trainers.sql"), per_class)
 
     print(f"Northshire areas: {sorted(northshire)}  (start position area {start_area})")
-    print(f"Either/or quest aliases: {quest_aliases or 'none'}")
-    for r in regions_out:
-        print(f"{r['name']:18} quests {len(r['quests']):3}  explore {len(r['explore']):2}  rares {len(r['rares']):2}")
-    print(f"Gear: {sum(g['copies'] for g in gear_out.values())} items from {len(strip)} quests")
-    for name, g in gear_out.items():
-        print(f"  L{g['req']:<2} {g['id']:>6} x{g['copies']}  {name}")
+    print(f"Either/or quest groups: {len(groups)}")
+    for i, r in enumerate(regions_out):
+        n = sum(1 for q in quests_out if q["region"] == i)
+        print(f"{r['name']:18} quests {n:3} (all races/classes)  explore {len(r['explore']):2}  rares {len(r['rares']):2}")
+    print(f"Gear: {len(gear_names)} items from {len(strip)} quests")
     print(f"Random filler items: {len(random_out)}  "
           + ", ".join(f"{c} {n}" for c, n in sorted(Counter(c for _, c in random_out.values()).items())))
     print(f"End-game gear: {len(end_game_out)}  "
           + ", ".join(f"{s} {n}" for s, n in sorted(Counter(s for _, s in end_game_out.values()).items())))
-    print(f"Trainer checks: {len(trainer_out)}, sold by {len(sp['npcs'])} trainer NPCs")
-    print(f"Spells: {len(spells_out)}")
-    for name, s in spells_out.items():
-        print(f"  L{s['level']:<2} {s['id']:>6}  {name}  [{s['source']}]")
+    for cls, c in per_class.items():
+        n_tr = sum(1 for sp in c["pool"].values() if sp["source"] == "trainer")
+        where = REGION_DEFS[c["region"]]["name"] if c["region"] is not None else "none in our zones"
+        print(f"{CLASSES[cls]:8} spells {len(c['pool']):2}  trainer checks {n_tr:2}  "
+              f"trainers {len(c['npcs']):2} (first in {where})")
 
 
 if __name__ == "__main__":

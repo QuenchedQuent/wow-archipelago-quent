@@ -2,8 +2,10 @@
 
 ## What does randomization do?
 
-Your character starts in Northshire Valley with almost no class abilities and
-cannot leave the valley. Completing quests, reaching levels, exploring subzones
+Play any Alliance race and any class but the Death Knight (the `character_race` and
+`character_class` options). Your character starts in Northshire Valley with almost no
+class abilities and cannot leave the valley; other races are brought there on their
+first login. Completing quests, reaching levels, exploring subzones
 and killing rare mobs sends checks. Zone access keys, class spells and quest reward
 gear are shuffled into the multiworld.
 

@@ -1,7 +1,22 @@
 # WoW Archipelago
 
 Archipelago randomizer for World of Warcraft 3.3.5 on an AzerothCore + ALE (Lua engine) private
-server, with content limited to classic zones. The MVP covers a Human Warrior going from Northshire to Elwynn to Westfall.
+server, with content limited to classic zones. It covers Northshire, Elwynn Forest and Westfall
+(levels 1-20) for any Alliance race and any class but the Death Knight.
+
+## Characters
+Each slot picks `character_race` (human, dwarf, night elf, gnome, draenei) and `character_class`
+(warrior, paladin, hunter, rogue, priest, shaman, mage, warlock, druid); generation rejects
+combinations the game doesn't allow. Non-human races start in their own zone, which is outside
+the fence, so their first login brings them to Northshire. Horde races aren't supported: Elwynn
+Forest is hostile to them. Death Knights start at level 55 in their own zone.
+
+The extractor keeps every quest a playable race/class can take, with its race and class masks;
+the APWorld picks a slot's quests (a quest counts when the masks allow the character and its
+prerequisite is available). Spells, trainer checks and trainer NPCs are per class. Spells taught
+by class quests anywhere up to level 20 are pooled too (pet taming, Bear Form, stances, totems),
+since those quests are often in racial starting zones outside the fence. The client only links a
+character of the slot's race and class.
 
 ```
 AP Server <-WebSocket-> WoW Client (in AP Launcher) <-MySQL ap_* tables-> server script (ALE) <-addon msgs-> addon (UI)
@@ -92,21 +107,25 @@ useful item: head, neck, shoulders, back, chest, wrists, hands, waist, legs, fee
 trinket, weapon, off-hand and ranged/relic (`END_GAME_SLOTS` in the extractor).
 
 ## Trainer checks
-Each trainer spell in the pool (25 for a Warrior, levels 1 to 20) becomes a `Trainer: <spell>`
-location. Every class trainer sells them, each at the spell's usual level and price. The addon
+Each trainer spell in a class's pool (24 to 42 depending on class, levels 1 to 20) becomes a
+`Trainer: <spell>` location. Every trainer of that class sells them, each at the spell's usual
+level and price. The addon
 lists them in the trainer window, in an "Archipelago" section below the real spells, with what
 each check holds (`addon/Archipelago/TrainerChecks.lua` wraps the trainer API that
 Blizzard_TrainerUI reads). Training one sends `BUY <spell>` to the server script, which checks
-that you are at a class trainer and have the level and money, then takes the money and sends
-the check. In logic, a check sits in the region that owns its level. Turn the checks off with
+that you are at a trainer of your class and have the level and money, then takes the money and
+sends the check. In logic, a check sits in the region that owns its level, or the first region
+with a trainer of your class if that is later (hunter, shaman and druid trainers are in
+Stormwind, so their checks need the Elwynn key). Turn the checks off with
 the `include_trainer_checks` option.
 
 ## Quest rewards
 A quest that is a location gives its normal XP, money and reputation, but its gear is replaced by
-the Archipelago check. That gear (for "choose one" rewards, the best pick for a warrior) is added
-to the item pool, so it may arrive from any check in the multiworld. Non-gear rewards such as food,
+the Archipelago check. That gear (for "choose one" rewards, one of the options at random each
+seed) is added to the item pool, so it may arrive from any check in the multiworld. Non-gear rewards such as food,
 and items other quests need, are left alone. The client scouts every location, and the addon
 shows what each quest holds next to the quest window and the quest log.
 
 ## Next (see plan)
-Vendor checks, equip and flight-path items, and more classes and zones.
+Vendor checks, equip and flight-path items, Horde starting zones, and more zones. Shaman totem
+spells still need their totem items, which the class quests normally hand out.
