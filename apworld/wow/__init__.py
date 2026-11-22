@@ -8,13 +8,7 @@ from worlds.LauncherComponents import Component, Type, components, launch_subpro
 from .data import FILLER_ITEMS, GAME, GEAR, REGIONS, SPELLS, ZONE_KEYS, is_grindy_level, level_location_name
 from .items import ITEM_CLASSIFICATION, ITEM_GROUPS, ITEM_TABLE, WoWItem
 from .locations import LOCATION_TABLE, WoWLocation, region_locations
-from .options import CombatLogic, WoWOptions, ZoneKeyPlacement
-
-# Combat logic: region -> (spells, gear) needed to enter it, per CombatLogic option.
-COMBAT_REQUIREMENTS = {
-    CombatLogic.option_normal: {"Elwynn Forest": (2, 0), "Westfall": (5, 2)},
-    CombatLogic.option_easy: {"Elwynn Forest": (4, 1), "Westfall": (9, 4)},
-}
+from .options import WoWOptions, ZoneKeyPlacement
 
 
 def launch_client(*args: str) -> None:
@@ -85,10 +79,7 @@ class WoWWorld(World):
     item_name_groups = ITEM_GROUPS
 
     def create_item(self, name: str) -> WoWItem:
-        classification = ITEM_CLASSIFICATION[name]
-        if (name in SPELLS or name in GEAR) and self.options.combat_logic != CombatLogic.option_off:
-            classification = ItemClassification.progression   # counted by the zone rules
-        return WoWItem(name, classification, self.item_name_to_id[name], self.player)
+        return WoWItem(name, ITEM_CLASSIFICATION[name], self.item_name_to_id[name], self.player)
 
     def get_filler_item_name(self) -> str:
         return self.random.choice(list(FILLER_ITEMS))
@@ -109,13 +100,9 @@ class WoWWorld(World):
             self.exclude_grindy(region, rdata)
             self.multiworld.regions.append(region)
 
-            spells, gear = COMBAT_REQUIREMENTS.get(self.options.combat_logic.value, {}).get(rdata.name, (0, 0))
-            if rdata.key_item or spells or gear:
+            if rdata.key_item:
                 previous.connect(region, f"{previous.name} -> {region.name}",
-                                 lambda state, k=rdata.key_item, s=spells, g=gear:
-                                     (not k or state.has(k, self.player))
-                                     and (not s or state.has_group("Spells", self.player, s))
-                                     and (not g or state.has_group("Gear", self.player, g)))
+                                 lambda state, k=rdata.key_item: state.has(k, self.player))
             else:
                 previous.connect(region, f"{previous.name} -> {region.name}")
 

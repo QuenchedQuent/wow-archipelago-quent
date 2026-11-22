@@ -12,9 +12,7 @@ Archipelago check per spell, at the spell's usual level and price. Talk to the
 trainer and pick "Archipelago checks" to see what each one holds.
 
 Only Northshire, Elwynn Forest, Stormwind City and Westfall are part of the game; walking
-anywhere else sends you back. By default the logic also expects a few spells and gear
-pieces before each new zone (the `combat_logic` option). Rares and the last levels of each
-zone only hold filler.
+anywhere else sends you back. Rares and the last levels of each zone only hold filler.
 
 ## What is the goal?
 

@@ -68,10 +68,6 @@ characters created earlier, unless the player received that spell from the multi
   dropped. Either/or quests (exclusive groups) are one location that any of them completes.
 - **Zone keys** are progression. `zone_key_placement`: `anywhere` (default) shuffles them into
   the multiworld; `start_with` gives you both.
-- **Combat logic** (`combat_logic`): how many spells and gear items a zone expects.
-  `normal` (default): Elwynn needs 2 spells, Westfall 5 spells + 2 gear. `easy`: 4 spells + 1
-  gear, then 9 spells + 4 gear. `off`: keys only. When on, spells and gear are progression;
-  when off they are useful.
 - **Fence:** only Northshire (until you have the Elwynn key), Elwynn Forest, Stormwind City
   (Elwynn key) and Westfall (Westfall key) are in the randomizer. Other zones, other
   continents, the tram and dungeons are fenced off. A fenced player is sent back to the last

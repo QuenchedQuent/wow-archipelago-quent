@@ -37,19 +37,6 @@ class ZoneKeyPlacement(Choice):
     default = 0
 
 
-class CombatLogic(Choice):
-    """How many class spells and gear items the logic expects before a zone counts as
-    reachable. Spells and gear become progression items when this is on.
-    Off: only Zone keys matter.
-    Normal: Elwynn Forest needs 2 spells; Westfall needs 5 spells and 2 gear.
-    Easy: Elwynn Forest needs 4 spells and 1 gear; Westfall needs 9 spells and 4 gear."""
-    display_name = "Combat Logic"
-    option_off = 0
-    option_normal = 1
-    option_easy = 2
-    default = 1
-
-
 @dataclass
 class WoWOptions(PerGameCommonOptions):
     goal_level: GoalLevel
@@ -57,4 +44,3 @@ class WoWOptions(PerGameCommonOptions):
     include_rares: IncludeRares
     include_trainer_checks: IncludeTrainerChecks
     zone_key_placement: ZoneKeyPlacement
-    combat_logic: CombatLogic
