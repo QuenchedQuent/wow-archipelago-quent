@@ -77,11 +77,13 @@ characters created earlier, unless the player received that spell from the multi
 
 ## Trainer checks
 Each trainer spell in the pool (25 for a Warrior, levels 1 to 20) becomes a `Trainer: <spell>`
-location. Every class trainer sells them, each at the spell's usual level and price. For linked
-characters of our class, the server script replaces the trainer's menu with: quests, the normal
-training window, "Archipelago checks" (what each check holds, shown before you buy) and talent
-reset. Other characters get the normal menu. In logic, a check sits in the region that owns its
-level. Turn the checks off with the `include_trainer_checks` option.
+location. Every class trainer sells them, each at the spell's usual level and price. The addon
+lists them in the trainer window, in an "Archipelago" section below the real spells, with what
+each check holds (`addon/Archipelago/TrainerChecks.lua` wraps the trainer API that
+Blizzard_TrainerUI reads). Training one sends `BUY <spell>` to the server script, which checks
+that you are at a class trainer and have the level and money, then takes the money and sends
+the check. In logic, a check sits in the region that owns its level. Turn the checks off with
+the `include_trainer_checks` option.
 
 ## Quest rewards
 A quest that is a location gives its normal XP, money and reputation, but its gear is replaced by

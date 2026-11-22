@@ -8,8 +8,8 @@ and killing rare mobs sends checks. Zone access keys, class spells and quest rew
 gear are shuffled into the multiworld.
 
 Class trainers no longer teach the shuffled spells. Instead they sell one
-Archipelago check per spell, at the spell's usual level and price. Talk to the
-trainer and pick "Archipelago checks" to see what each one holds.
+Archipelago check per spell, at the spell's usual level and price. They are listed
+in the trainer window under "Archipelago", along with what each one holds.
 
 Only Northshire, Elwynn Forest, Stormwind City and Westfall are part of the game; walking
 anywhere else sends you back. Rares and the last levels of each zone only hold filler.

@@ -779,7 +779,7 @@ ArchipelagoData = {{
     locked_spells = {lua_set(locked)},
     -- Either/or quests: completing one of these counts as the listed quest's location.
     quest_aliases = {{ {alias_text} }},
-    -- Class trainer NPC entry -> greeting text; they sell the checks below.
+    -- Class trainer NPC entries (-> greeting text); you must stand at one to buy a check.
     trainers = {{ {trainers} }},
     -- Trainer checks: bought from a class trainer in place of the spell (location kind 5).
     trainer_checks = {{

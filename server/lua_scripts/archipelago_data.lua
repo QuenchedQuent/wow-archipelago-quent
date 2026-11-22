@@ -14,7 +14,7 @@ ArchipelagoData = {
     locked_spells = { [71] = true, [72] = true, [100] = true, [284] = true, [285] = true, [355] = true, [674] = true, [676] = true, [694] = true, [772] = true, [845] = true, [1160] = true, [1715] = true, [2565] = true, [2687] = true, [3127] = true, [5242] = true, [6343] = true, [6546] = true, [6547] = true, [6572] = true, [6673] = true, [7384] = true, [7386] = true, [8198] = true, [12678] = true, [20230] = true, [34428] = true },
     -- Either/or quests: completing one of these counts as the listed quest's location.
     quest_aliases = {  },
-    -- Class trainer NPC entry -> greeting text; they sell the checks below.
+    -- Class trainer NPC entries (-> greeting text); you must stand at one to buy a check.
     trainers = { [911] = 1216, [912] = 1215, [913] = 1216, [914] = 1216, [985] = 1040, [1229] = 1215, [1901] = 1215, [2119] = 1219, [2131] = 1219, [3041] = 1218, [3042] = 1218, [3043] = 1218, [3059] = 1218, [3063] = 1218, [3153] = 1040, [3169] = 1040, [3353] = 1040, [3354] = 1040, [3408] = 1218, [3593] = 1217, [3598] = 1217, [4087] = 1217, [4089] = 1217, [4593] = 1219, [4594] = 1219, [4595] = 1219, [5113] = 1215, [5114] = 4989, [5479] = 1216, [5480] = 1216, [7315] = 1217, [8141] = 4992, [16503] = 8587, [16771] = 8587, [17120] = 8587, [17480] = 8587, [17504] = 8587 },
     -- Trainer checks: bought from a class trainer in place of the spell (location kind 5).
     trainer_checks = {

@@ -5,9 +5,12 @@
 --   L <locationId> <checked 0/1> <name> <flags> <contents>  tracker entry (+ what it holds)
 --   C <locationId>                                       location became checked
 --   I <itemName> <sender>                                item received
+--   T <spell> <level> <copper> <spellName>               trainer check (sold by class trainers)
+--   B <locationId>                                       trainer check bought
 --   RESET / END                                          full sync boundaries
 -- Addon -> server:
 --   SYNC                                                 request full sync
+--   BUY <spell>                                          buy a trainer check
 
 Archipelago = {
     PREFIX = "AP",
@@ -18,6 +21,7 @@ Archipelago = {
     status = { connected = false, slot = "", checked = 0, total = 0, goal = 0 },
     locations = {},   -- id -> { name, checked, kind }
     feed = {},        -- recent received items, newest first
+    trainerChecks = {}, -- spell -> { spell, level, cost, name }
     syncing = false,
 }
 local AP = Archipelago
@@ -111,8 +115,21 @@ handlers.I = function(f)
     ArchipelagoDB.feed = AP.feed
 end
 
+handlers.T = function(f)
+    local spell = tonumber(f[2])
+    if not spell then return end
+    AP.trainerChecks[spell] = { spell = spell, level = tonumber(f[3]) or 1, cost = tonumber(f[4]) or 0,
+                                name = f[5] or ("Spell " .. spell) }
+end
+
+handlers.B = function(f)
+    local loc = AP.locations[tonumber(f[2])]
+    if loc then loc.checked = true end
+end
+
 handlers.RESET = function()
     AP.locations = {}
+    AP.trainerChecks = {}
     AP.syncing = true
 end
 
@@ -142,6 +159,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             if not AP.syncing then
                 if AP.Refresh then AP:Refresh() end
                 if AP.RefreshQuestInfo then AP:RefreshQuestInfo() end
+                if AP.RefreshTrainer then AP:RefreshTrainer() end
             end
         end
     end
